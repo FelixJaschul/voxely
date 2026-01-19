@@ -1,5 +1,4 @@
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
@@ -14,32 +13,8 @@
 #define CAMERA_IMPLEMENTATION
 #define MODEL_IMPLEMENTATION
 #define SDL_IMPLEMENTATION
+#define IMGUI_IMPLEMENTATION
 #include <wrapper/core.h>
-
-typedef struct {
-    Vec3 v0, e1, e2, normal, color;
-} PreparedTriangle;
-
-bool ray_prepared_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* t) {
-    const Vec3 h = cross(ray.direction, tri->e2);
-    const float a = dot(tri->e1, h);
-    if (a > -0.00001f && a < 0.00001f)
-        return false;
-    const float f = 1.0f / a;
-    const Vec3 s = sub(ray.origin, tri->v0);
-    const float u = f * dot(s, h);
-    if (u < 0.0f || u > 1.0f)
-        return false;
-    const Vec3 q = cross(s, tri->e1);
-    if (const float v = f * dot(ray.direction, q);
-        v < 0.0f || u + v > 1.0f) return false;
-    if (const float _t = f * dot(tri->e2, q);
-        _t > 0.00001f) {
-        *t = _t;
-        return true;
-    }
-    return false;
-}
 
 #define ASSERT(x) do { if(!(x)) std::cout << "Assertion failed: " << #x << std::endl; } while(0)
 #define LOG(x) do { std::cout << x << std::endl; } while(0)
@@ -47,214 +22,208 @@ bool ray_prepared_triangle_intersect(const Ray &ray, const PreparedTriangle* tri
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
-#define WIDTH 298*2
-#define HEIGHT 198*2
+#define WIDTH 800
+#define HEIGHT 600
 #define RENDER_SCALE 0.5f
+#define MAX_MODELS 32
 
-#define CHUNK_SIZE 32
-#define CHUNK_VOL (CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE)
-
-float mouse_sensitivity = 0.002f;
-
-typedef struct { Vec3 min, max; } AABB;
-
+// Prepared triangle
 typedef struct
 {
-    int width;
-    int height;
-    uint32_t* pixels;
-} fb_t;
+    Vec3 v0, e1, e2;
+    Vec3 color;
+} PreparedTriangle;
 
-#define MAX_MODELS 16
+// Ray-triangle intersection
+bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* t)
+{
+    const Vec3 h = cross(ray.direction, tri->e2);
+    const float a = dot(tri->e1, h);
+    if (a > -0.00001f && a < 0.00001f) return false;
 
-typedef struct 
+    const float f = 1.0f / a;
+    const Vec3 s = sub(ray.origin, tri->v0);
+    const float u = f * dot(s, h);
+    if (u < 0.0f || u > 1.0f) return false;
+
+    const Vec3 q = cross(s, tri->e1);
+    const float v = f * dot(ray.direction, q);
+    if (v < 0.0f || u + v > 1.0f) return false;
+
+    const float _t = f * dot(tri->e2, q);
+    if (_t > 0.00001f) { *t = _t; return true; }
+    return false;
+}
+
+// State
+typedef struct
 {
     Window_t win;
-    int state;
-    fb_t fb;
+    SDL_Texture* texture;
+
+    int fb_width;
+    int fb_height;
+
     Camera cam;
     Input input;
+
     Model models[MAX_MODELS];
     int num_models;
-    SDL_Texture* texture;
-} state_t;
 
-state_t state;
+    std::vector<PreparedTriangle> scene_tris;
 
-#define present_frame() do { \
-    void* _pixels; \
-    int _pitch; \
-    SDL_LockTexture(state.texture, nullptr, &_pixels, &_pitch); \
-    memcpy(_pixels, state.fb.pixels, state.fb.width * state.fb.height * 4); \
-    SDL_UnlockTexture(state.texture); \
-    SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr); \
-} while(0)
+    bool running;
+    float move_speed;
+    float mouse_sensitivity;
+    int num_threads;
+} State;
 
-int main()
+State state;
+
+Vec3 trace_ray(const Ray& ray)
 {
-    windowInit(&state.win);
-    state.win.width = WIDTH * 2;
-    state.win.height = HEIGHT * 2;
-    state.win.title = "renderer";
-    if (!createWindow(&state.win)) return 1;
+    float min_t = 1e10f;
+    const PreparedTriangle* hit = nullptr;
 
-    state.fb.width  = static_cast<int>(WIDTH * RENDER_SCALE);
-    state.fb.height = static_cast<int>(HEIGHT * RENDER_SCALE);
-    state.fb.pixels = static_cast<uint32_t *>(malloc(state.fb.width * state.fb.height * 4));
-
-    state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, state.fb.width, state.fb.height);
-    ASSERT(state.texture);
-
-    Camera camera;
-    cameraInit(&camera);
-    camera.position = vec3(0.0f, 0.0f, 2.0f);
-    camera.yaw = -90.0f;
-
-    Input input;
-    inputInit(&input);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-    ImGui::StyleColorsDark();
-    ImGui_ImplSDL3_InitForSDLRenderer(state.win.window, state.win.renderer);
-    ImGui_ImplSDLRenderer3_Init(state.win.renderer);
-
-    cameraInit(&state.cam);
-    state.cam.position = vec3(0, 0, 5);
-    state.cam.yaw = -90.0f; // Look towards -Z
-    cameraUpdate(&state.cam);
-
-    state.num_models = 0;
-    if (Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1,0,0), 0.5f, 1.0f)) {
-        modelLoad(cube, "../res/cube.obj");
-        modelTransform(cube, vec3(0,0,0), vec3(0.4f, 0.4f, 0), vec3(2,2,2));
+    for (const auto& tri : state.scene_tris)
+    {
+        float t;
+        if (ray_triangle_intersect(ray, &tri, &t)) {
+            if (t < min_t) { min_t = t; hit = &tri; }
+        }
     }
 
-    state.state = 0;
-    while (state.state == 0)
+    if (!hit) return vec3(0,0,0);
+    return hit->color;
+}
+
+void render_frame()
+{
+    const float aspect = static_cast<float>(state.fb_width) / static_cast<float>(state.fb_height);
+    const float vp_height = 2.0f * tanf(static_cast<float>(state.cam.fov * M_PI / 180.0f) / 2.0f);
+    const float vp_width = vp_height * aspect;
+
+    auto render_rows = [&](const int y0, const int y1)
     {
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
+        for (int y = y0; y < y1; y++)
         {
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT) state.state = 1;
+            for (int x = 0; x < state.fb_width; x++)
+            {
+                const float u = (static_cast<float>(x) / static_cast<float>(state.fb_width - 1) - 0.5f) * vp_width;
+                const float v = (0.5f - static_cast<float>(y) / static_cast<float>(state.fb_height - 1)) * vp_height;
 
-            const bool shift_down = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
-            if (SDL_GetWindowRelativeMouseMode(state.win.window) != shift_down) {
-                SDL_SetWindowRelativeMouseMode(state.win.window, shift_down);
+                const Ray ray = cameraGetRay(&state.cam, u, v);
+                const auto [cx, cy, cz] = trace_ray(ray);
+
+                const auto r = static_cast<uint8_t>(fminf(cx, 1) * 255);
+                const auto g = static_cast<uint8_t>(fminf(cy, 1) * 255);
+                const auto b = static_cast<uint8_t>(fminf(cz, 1) * 255);
+
+                state.win.buffer[y * state.fb_width + x] = (0xFF<<24)|(r<<16)|(g<<8)|b;
             }
+        }
+    };
 
-            if (event.type == SDL_EVENT_MOUSE_MOTION && shift_down) {
-                cameraRotate(&state.cam, event.motion.xrel * 0.5f, -event.motion.yrel * 0.5f);
+    std::vector<std::future<void>> jobs;
+    const int rows = state.fb_height / state.num_threads;
+
+    for (int i = 0; i < state.num_threads; i++) {
+        int s = i * rows;
+        int e = (i == state.num_threads-1) ? state.fb_height : (i+1)*rows;
+        jobs.push_back(std::async(std::launch::async, render_rows, s, e));
+    }
+    for (auto& j : jobs) j.wait();
+}
+
+void update()
+{
+    updateInput(&state.input);
+    if (pollEvents(nullptr, &state.input)) { state.running = false; return; }
+
+    if (isKeyDown(&state.input, KEY_LSHIFT)) releaseMouse(state.win.window, &state.input);
+    else if (!isMouseGrabbed(&state.input)) grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
+    int dx, dy; getMouseDelta(&state.input, &dx, &dy);
+    cameraRotate(&state.cam, dx * state.mouse_sensitivity, -dy * state.mouse_sensitivity);
+
+    if (isKeyDown(&state.input, KEY_W)) cameraMove(&state.cam, state.cam.front, state.move_speed);
+    if (isKeyDown(&state.input, KEY_S)) cameraMove(&state.cam, mul(state.cam.front,-1), state.move_speed);
+    if (isKeyDown(&state.input, KEY_A)) cameraMove(&state.cam, mul(state.cam.right,-1), state.move_speed);
+    if (isKeyDown(&state.input, KEY_D)) cameraMove(&state.cam, state.cam.right, state.move_speed);
+}
+
+int main() {
+    windowInit(&state.win);
+    state.win.width = WIDTH;
+    state.win.height = HEIGHT;
+    state.win.title = "ray";
+    ASSERT(createWindow(&state.win));
+
+    state.fb_width = static_cast<int>((WIDTH * RENDER_SCALE));
+    state.fb_height = static_cast<int>((HEIGHT * RENDER_SCALE));
+
+    state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING,
+                                      state.fb_width, state.fb_height);
+
+    cameraInit(&state.cam);
+    state.cam.position = vec3(0,3,10);
+    state.cam.yaw = -90; state.cam.pitch = -20; cameraUpdate(&state.cam);
+
+    inputInit(&state.input);
+
+    state.running = true;
+    state.move_speed = 0.03;
+    state.mouse_sensitivity = 0.3f;
+    state.num_models = 0;
+    state.num_threads = static_cast<int>(std::thread::hardware_concurrency());
+    if (!state.num_threads) state.num_threads = 4;
+
+    {
+        if (Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1,0,0), 0, 0)) {
+            modelLoad(cube, "../res/cube.obj");
+            modelTransform(cube, vec3(0, 1, 0), vec3(0, 0, 0), vec3(4,4,4));
+        }
+    }
+
+    while (state.running)
+    {
+        update();
+
+        modelUpdate(state.models, state.num_models);
+        state.scene_tris.clear();
+        for (int m = 0; m < state.num_models; m++) {
+            const Model* model = &state.models[m];
+            for (int i = 0; i < model->num_triangles; i++) {
+                const auto& [v0,v1,v2] = model->transformed_triangles[i];
+                state.scene_tris.push_back({ v0, sub(v1,v0), sub(v2,v0), model->mat.color });
             }
         }
 
-        constexpr float move_speed = 0.03f;
-        if (isKeyDown(&input, KEY_W)) cameraMove(&camera, camera.front, move_speed);
-        if (isKeyDown(&input, KEY_S)) cameraMove(&camera, mul(camera.front, -1), move_speed);
-        if (isKeyDown(&input, KEY_A)) cameraMove(&camera, mul(camera.right, -1), move_speed);
-        if (isKeyDown(&input, KEY_D)) cameraMove(&camera, camera.right, move_speed);
+        render_frame();
+
+        void* pixels; int pitch;
+        SDL_LockTexture(state.texture, nullptr, &pixels, &pitch);
+        memcpy(pixels, state.win.buffer, state.fb_width*state.fb_height*4);
+        SDL_UnlockTexture(state.texture);
+
+        SDL_RenderClear(state.win.renderer);
+        SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr);
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::Begin("raytrace");
-        ImGui::Text("FPS: %.1f", io.Framerate);
-        ImGui::Text("%dx%d, %dx%d (Scale: %.2f)", state.win.width, state.win.height, state.fb.width, state.fb.height, RENDER_SCALE);
-        if (ImGui::Button("Quit")) state.state = 1;
-        ImGui::End();
-
-        // Render models
-        modelUpdate(state.models, state.num_models);
-
-        Vec3 light_dir = norm(vec3(1, 1, 1));
-        std::vector<PreparedTriangle> prepared_tris;
-        for (int m = 0; m < state.num_models; m++)
-        {
-            const Model* model = &state.models[m];
-            for (int i = 0; i < model->num_triangles; i++)
-            {
-                auto [v0, v1, v2] = model->transformed_triangles[i];
-                const Vec3 e1 = sub(v1, v0);
-                const Vec3 e2 = sub(v2, v0);
-                const Vec3 n = norm(cross(e1, e2));
-                prepared_tris.push_back({v0, e1, e2, n, model->mat.color});
-            }
-        }
-
-        float aspect_ratio = (float)state.fb.width / (float)state.fb.height;
-        float viewport_height = 2.0f * tanf((state.cam.fov * (float)M_PI / 180.0f) / 2.0f);
-        float viewport_width = viewport_height * aspect_ratio;
-
-        auto render_rows = [&](const int start_y, const int end_y) {
-            for (int y = start_y; y < end_y; y++) {
-                for (int x = 0; x < state.fb.width; x++) {
-                    const float u_scaled = (static_cast<float>(x) / static_cast<float>(state.fb.width - 1) - 0.5f) * viewport_width;
-                    const float v_scaled = (0.5f - static_cast<float>(y) / static_cast<float>(state.fb.height - 1)) * viewport_height;
-
-                    Ray ray = cameraGetRay(&state.cam, u_scaled, v_scaled);
-
-                    float min_t = 1e10f;
-                    Vec3 hit_color = vec3(0.2f, 0.4f, 0.6f); // Background color
-
-                    for (const auto& tri : prepared_tris)
-                    {
-                        float t;
-                        if (ray_prepared_triangle_intersect(ray, &tri, &t))
-                        {
-                            if (t < min_t)
-                            {
-                                min_t = t;
-                                // Simple diffuse shading
-                                float diff = MAX(0.2f, dot(tri.normal, light_dir));
-                                hit_color = mul(tri.color, diff);
-                            }
-                        }
-                    }
-
-                    const auto r = static_cast<uint8_t>((MIN(hit_color.x, 1.0f) * 255));
-                    const auto g = static_cast<uint8_t>((MIN(hit_color.y, 1.0f) * 255));
-                    const auto b = static_cast<uint8_t>((MIN(hit_color.z, 1.0f) * 255));
-                    state.fb.pixels[y * state.fb.width + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                }
-            }
-        };
-
-        int num_threads = static_cast<int>(std::thread::hardware_concurrency());
-        if (num_threads == 0) num_threads = 1;
-        std::vector<std::future<void>> futures;
-        int rows_per_thread = state.fb.height / num_threads;
-        for (int i = 0; i < num_threads; i++)
-        {
-            int start_y = i * rows_per_thread;
-            int end_y = (i == num_threads - 1) ? state.fb.height : (i + 1) * rows_per_thread;
-            futures.push_back(std::async(std::launch::async, render_rows, start_y, end_y));
-        }
-        for (auto& f : futures) f.wait();
+            ImGui::Begin("status");
+            ImGui::Text("Triangles: %zu", state.scene_tris.size());
+            ImGui::End();
 
         ImGui::Render();
-        SDL_SetRenderDrawColor(state.win.renderer, 0, 0, 0, 255);
-        SDL_RenderClear(state.win.renderer);
-
-        present_frame();
-
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), state.win.renderer);
         SDL_RenderPresent(state.win.renderer);
     }
 
-    free(state.fb.pixels);
-    for (auto &model : state.models) modelFree(&model);
-    ImGui_ImplSDLRenderer3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
+    for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]);
     SDL_DestroyTexture(state.texture);
-    SDL_DestroyRenderer(state.win.renderer);
-    SDL_DestroyWindow(state.win.window);
-    SDL_Quit();
-
+    destroyWindow(&state.win);
     return 0;
 }

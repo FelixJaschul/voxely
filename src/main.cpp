@@ -1,7 +1,5 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl3.h>
-#include <imgui_impl_sdlrenderer3.h>
 #include <iostream>
 #include <vector>
 #include <thread>
@@ -60,9 +58,6 @@ typedef struct
     Window_t win;
     SDL_Texture* texture;
 
-    int fb_width;
-    int fb_height;
-
     Camera cam;
     Input input;
 
@@ -98,7 +93,7 @@ Vec3 trace_ray(const Ray& ray)
 
 void render_frame()
 {
-    const float aspect = static_cast<float>(state.fb_width) / static_cast<float>(state.fb_height);
+    const float aspect = static_cast<float>(state.win.bWidth) / static_cast<float>(state.win.bHeight);
     const float vp_height = 2.0f * tanf(static_cast<float>(state.cam.fov * M_PI / 180.0f) / 2.0f);
     const float vp_width = vp_height * aspect;
 
@@ -106,10 +101,10 @@ void render_frame()
     {
         for (int y = y0; y < y1; y++)
         {
-            for (int x = 0; x < state.fb_width; x++)
+            for (int x = 0; x < state.win.bWidth; x++)
             {
-                const float u = (static_cast<float>(x) / static_cast<float>(state.fb_width - 1) - 0.5f) * vp_width;
-                const float v = (0.5f - static_cast<float>(y) / static_cast<float>(state.fb_height - 1)) * vp_height;
+                const float u = (static_cast<float>(x) / static_cast<float>(state.win.bWidth - 1) - 0.5f) * vp_width;
+                const float v = (0.5f - static_cast<float>(y) / static_cast<float>(state.win.bHeight - 1)) * vp_height;
 
                 const Ray ray = cameraGetRay(&state.cam, u, v);
                 const auto [cx, cy, cz] = trace_ray(ray);
@@ -118,17 +113,17 @@ void render_frame()
                 const auto g = static_cast<uint8_t>(fminf(cy, 1) * 255);
                 const auto b = static_cast<uint8_t>(fminf(cz, 1) * 255);
 
-                state.win.buffer[y * state.fb_width + x] = (0xFF<<24)|(r<<16)|(g<<8)|b;
+                state.win.buffer[y * state.win.bWidth + x] = (0xFF<<24)|(r<<16)|(g<<8)|b;
             }
         }
     };
 
     std::vector<std::future<void>> jobs;
-    const int rows = state.fb_height / state.num_threads;
+    const int rows = state.win.bHeight / state.num_threads;
 
     for (int i = 0; i < state.num_threads; i++) {
         int s = i * rows;
-        int e = (i == state.num_threads-1) ? state.fb_height : (i+1)*rows;
+        int e = (i == state.num_threads-1) ? state.win.bHeight : (i+1)*rows;
         jobs.push_back(std::async(std::launch::async, render_rows, s, e));
     }
     for (auto& j : jobs) j.wait();
@@ -152,17 +147,16 @@ void update()
 
 int main() {
     windowInit(&state.win);
-    state.win.width = WIDTH;
-    state.win.height = HEIGHT;
+    state.win.width   = WIDTH;
+    state.win.height  = HEIGHT;
+    state.win.bWidth  = WIDTH  * RENDER_SCALE;
+    state.win.bHeight = HEIGHT * RENDER_SCALE;
     state.win.title = "ray";
     ASSERT(createWindow(&state.win));
 
-    state.fb_width  = WIDTH *RENDER_SCALE;
-    state.fb_height = HEIGHT*RENDER_SCALE;
-
     state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888,
                                       SDL_TEXTUREACCESS_STREAMING,
-                                      state.fb_width, state.fb_height);
+                                      state.win.bWidth, state.win.bHeight);
 
     cameraInit(&state.cam);
     state.cam.position = vec3(0,3,10);
@@ -190,7 +184,8 @@ int main() {
 
         modelUpdate(state.models, state.num_models);
         state.scene_tris.clear();
-        for (int m = 0; m < state.num_models; m++) {
+        for (int m = 0; m < state.num_models; m++)
+        {
             const Model* model = &state.models[m];
             for (int i = 0; i < model->num_triangles; i++) {
                 const auto& [v0,v1,v2] = model->transformed_triangles[i];
@@ -198,11 +193,8 @@ int main() {
             }
         }
 
-        render_frame(); SDL_RenderClear(state.win.renderer);
-        updateFramebuffer(&state.win, state.texture, RENDER_SCALE);
-
-        SDL_RenderClear(state.win.renderer);
-        SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr);
+        render_frame();
+        updateFramebuffer(&state.win, state.texture);
 
         imguiNewFrame();
 

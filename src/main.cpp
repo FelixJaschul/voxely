@@ -209,16 +209,13 @@ int main() {
         SDL_RenderClear(state.win.renderer);
         SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr);
 
-        ImGui_ImplSDLRenderer3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
+        imguiNewFrame();
 
             ImGui::Begin("status");
             ImGui::Text("Triangles: %zu", state.scene_tris.size());
             ImGui::End();
 
-        ImGui::Render();
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), state.win.renderer);
+        imguiEndFrame(&state.win);
         SDL_RenderPresent(state.win.renderer);
     }
 

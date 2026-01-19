@@ -62,7 +62,8 @@ float mouse_sensitivity = 0.002f;
 
 typedef struct { Vec3 min, max; } AABB;
 
-typedef struct {
+typedef struct
+{
     int width;
     int height;
     uint32_t* pixels;
@@ -70,17 +71,16 @@ typedef struct {
 
 #define MAX_MODELS 16
 
-typedef struct {
-    SDL_Window* window;
-    SDL_Renderer* renderer;
-    SDL_Texture* texture;
+typedef struct 
+{
+    Window_t win;
     int state;
     fb_t fb;
     Camera cam;
     Input input;
-    int win_w, win_h;
     Model models[MAX_MODELS];
     int num_models;
+    SDL_Texture* texture;
 } state_t;
 
 state_t state;
@@ -91,26 +91,22 @@ state_t state;
     SDL_LockTexture(state.texture, nullptr, &_pixels, &_pitch); \
     memcpy(_pixels, state.fb.pixels, state.fb.width * state.fb.height * 4); \
     SDL_UnlockTexture(state.texture); \
-    SDL_RenderTexture(state.renderer, state.texture, nullptr, nullptr); \
+    SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr); \
 } while(0)
 
 int main()
 {
-    state.win_w = WIDTH;
-    state.win_h = HEIGHT;
-    ASSERT(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+    windowInit(&state.win);
+    state.win.width = WIDTH * 2;
+    state.win.height = HEIGHT * 2;
+    state.win.title = "renderer";
+    if (!createWindow(&state.win)) return 1;
 
-    state.window = SDL_CreateWindow("renderer", state.win_w*2, state.win_h*2, SDL_WINDOW_RESIZABLE);
-    ASSERT(state.window);
-
-    state.renderer = SDL_CreateRenderer(state.window, nullptr);
-    ASSERT(state.renderer);
-
-    state.fb.width  = static_cast<int>(state.win_w * RENDER_SCALE);
-    state.fb.height = static_cast<int>(state.win_h * RENDER_SCALE);
+    state.fb.width  = static_cast<int>(WIDTH * RENDER_SCALE);
+    state.fb.height = static_cast<int>(HEIGHT * RENDER_SCALE);
     state.fb.pixels = static_cast<uint32_t *>(malloc(state.fb.width * state.fb.height * 4));
 
-    state.texture = SDL_CreateTexture(state.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, state.fb.width, state.fb.height);
+    state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, state.fb.width, state.fb.height);
     ASSERT(state.texture);
 
     Camera camera;
@@ -127,8 +123,8 @@ int main()
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
-    ImGui_ImplSDL3_InitForSDLRenderer(state.window, state.renderer);
-    ImGui_ImplSDLRenderer3_Init(state.renderer);
+    ImGui_ImplSDL3_InitForSDLRenderer(state.win.window, state.win.renderer);
+    ImGui_ImplSDLRenderer3_Init(state.win.renderer);
 
     cameraInit(&state.cam);
     state.cam.position = vec3(0, 0, 5);
@@ -151,8 +147,8 @@ int main()
             if (event.type == SDL_EVENT_QUIT) state.state = 1;
 
             const bool shift_down = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
-            if (SDL_GetWindowRelativeMouseMode(state.window) != shift_down) {
-                SDL_SetWindowRelativeMouseMode(state.window, shift_down);
+            if (SDL_GetWindowRelativeMouseMode(state.win.window) != shift_down) {
+                SDL_SetWindowRelativeMouseMode(state.win.window, shift_down);
             }
 
             if (event.type == SDL_EVENT_MOUSE_MOTION && shift_down) {
@@ -172,7 +168,7 @@ int main()
 
         ImGui::Begin("raytrace");
         ImGui::Text("FPS: %.1f", io.Framerate);
-        ImGui::Text("%dx%d, %dx%d (Scale: %.2f)", state.win_w, state.win_h, state.fb.width, state.fb.height, RENDER_SCALE);
+        ImGui::Text("%dx%d, %dx%d (Scale: %.2f)", state.win.width, state.win.height, state.fb.width, state.fb.height, RENDER_SCALE);
         if (ImGui::Button("Quit")) state.state = 1;
         ImGui::End();
 
@@ -252,13 +248,13 @@ int main()
 #endif
 
         ImGui::Render();
-        SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 255);
-        SDL_RenderClear(state.renderer);
+        SDL_SetRenderDrawColor(state.win.renderer, 0, 0, 0, 255);
+        SDL_RenderClear(state.win.renderer);
 
         present_frame();
 
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), state.renderer);
-        SDL_RenderPresent(state.renderer);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), state.win.renderer);
+        SDL_RenderPresent(state.win.renderer);
     }
 
     free(state.fb.pixels);
@@ -267,8 +263,8 @@ int main()
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     SDL_DestroyTexture(state.texture);
-    SDL_DestroyRenderer(state.renderer);
-    SDL_DestroyWindow(state.window);
+    SDL_DestroyRenderer(state.win.renderer);
+    SDL_DestroyWindow(state.win.window);
     SDL_Quit();
 
     return 0;

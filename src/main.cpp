@@ -48,11 +48,9 @@ bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* 
     if (u < 0.0f || u > 1.0f) return false;
 
     const Vec3 q = cross(s, tri->e1);
-    const float v = f * dot(ray.direction, q);
-    if (v < 0.0f || u + v > 1.0f) return false;
+    if (const float v = f * dot(ray.direction, q); v < 0.0f || u + v > 1.0f) return false;
 
-    const float _t = f * dot(tri->e2, q);
-    if (_t > 0.00001f) { *t = _t; return true; }
+    if (const float _t = f * dot(tri->e2, q); _t > 0.00001f) { *t = _t; return true; }
     return false;
 }
 

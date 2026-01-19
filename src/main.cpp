@@ -8,10 +8,6 @@
 #include <thread>
 #include <future>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 #define CORE_IMPLEMENTATION
 #define MATH_IMPLEMENTATION
 #define KEYS_IMPLEMENTATION
@@ -156,7 +152,7 @@ int main()
             }
         }
 
-        const float move_speed = 0.03f;
+        constexpr float move_speed = 0.03f;
         if (isKeyDown(&input, KEY_W)) cameraMove(&camera, camera.front, move_speed);
         if (isKeyDown(&input, KEY_S)) cameraMove(&camera, mul(camera.front, -1), move_speed);
         if (isKeyDown(&input, KEY_A)) cameraMove(&camera, mul(camera.right, -1), move_speed);
@@ -220,21 +216,15 @@ int main()
                         }
                     }
 
-                    const uint8_t r = static_cast<uint8_t>((MIN(hit_color.x, 1.0f) * 255));
-                    const uint8_t g = static_cast<uint8_t>((MIN(hit_color.y, 1.0f) * 255));
-                    const uint8_t b = static_cast<uint8_t>((MIN(hit_color.z, 1.0f) * 255));
+                    const auto r = static_cast<uint8_t>((MIN(hit_color.x, 1.0f) * 255));
+                    const auto g = static_cast<uint8_t>((MIN(hit_color.y, 1.0f) * 255));
+                    const auto b = static_cast<uint8_t>((MIN(hit_color.z, 1.0f) * 255));
                     state.fb.pixels[y * state.fb.width + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
                 }
             }
         };
 
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic)
-        for (int y = 0; y < state.fb.height; y++) {
-            render_rows(y, y + 1);
-        }
-#else
-        int num_threads = std::thread::hardware_concurrency();
+        int num_threads = static_cast<int>(std::thread::hardware_concurrency());
         if (num_threads == 0) num_threads = 1;
         std::vector<std::future<void>> futures;
         int rows_per_thread = state.fb.height / num_threads;
@@ -245,7 +235,6 @@ int main()
             futures.push_back(std::async(std::launch::async, render_rows, start_y, end_y));
         }
         for (auto& f : futures) f.wait();
-#endif
 
         ImGui::Render();
         SDL_SetRenderDrawColor(state.win.renderer, 0, 0, 0, 255);

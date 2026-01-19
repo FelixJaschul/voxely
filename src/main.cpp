@@ -22,6 +22,7 @@
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
+#define PATH "../res/cube.obj"
 #define WIDTH 800
 #define HEIGHT 600
 #define RENDER_SCALE 0.5f
@@ -158,8 +159,8 @@ int main() {
     state.win.title = "ray";
     ASSERT(createWindow(&state.win));
 
-    state.fb_width = static_cast<int>((WIDTH * RENDER_SCALE));
-    state.fb_height = static_cast<int>((HEIGHT * RENDER_SCALE));
+    state.fb_width  = WIDTH *RENDER_SCALE;
+    state.fb_height = HEIGHT*RENDER_SCALE;
 
     state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888,
                                       SDL_TEXTUREACCESS_STREAMING,
@@ -172,7 +173,7 @@ int main() {
     inputInit(&state.input);
 
     state.running = true;
-    state.move_speed = 0.03;
+    state.move_speed = 0.1;
     state.mouse_sensitivity = 0.3f;
     state.num_models = 0;
     state.num_threads = static_cast<int>(std::thread::hardware_concurrency());
@@ -180,7 +181,7 @@ int main() {
 
     {
         if (Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1,0,0), 0, 0)) {
-            modelLoad(cube, "../res/cube.obj");
+            modelLoad(cube, PATH);
             modelTransform(cube, vec3(0, 1, 0), vec3(0, 0, 0), vec3(4,4,4));
         }
     }
@@ -199,12 +200,8 @@ int main() {
             }
         }
 
-        render_frame();
-
-        void* pixels; int pitch;
-        SDL_LockTexture(state.texture, nullptr, &pixels, &pitch);
-        memcpy(pixels, state.win.buffer, state.fb_width*state.fb_height*4);
-        SDL_UnlockTexture(state.texture);
+        render_frame(); SDL_RenderClear(state.win.renderer);
+        updateFramebuffer(&state.win, state.texture, RENDER_SCALE);
 
         SDL_RenderClear(state.win.renderer);
         SDL_RenderTexture(state.win.renderer, state.texture, nullptr, nullptr);
@@ -212,11 +209,15 @@ int main() {
         imguiNewFrame();
 
             ImGui::Begin("status");
+            ImGui::Text("Path: %s", PATH);
+            ImGui::Text("Camera pos: %.2f, %.2f, %.2f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
+            ImGui::Text("Fps: %f", getFPS(&state.win));
             ImGui::Text("Triangles: %zu", state.scene_tris.size());
             ImGui::End();
 
         imguiEndFrame(&state.win);
         SDL_RenderPresent(state.win.renderer);
+        updateFrame(&state.win);
     }
 
     for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]);

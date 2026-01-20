@@ -129,16 +129,71 @@ void render_frame()
     for (auto& j : jobs) j.wait();
 }
 
+void handle_resize()
+{
+    if (!state.win.resized) return;
+
+    // Update buffer dimensions based on new window size
+    state.win.bWidth  = static_cast<int>(state.win.width  * RENDER_SCALE);
+    state.win.bHeight = static_cast<int>(state.win.height * RENDER_SCALE);
+
+    // Recreate framebuffer
+    if (!resizeBuffer(&state.win)) {
+        LOG("Failed to resize framebuffer");
+        state.running = false;
+        return;
+    }
+
+    // Recreate texture
+    if (state.texture) {
+        SDL_DestroyTexture(state.texture);
+    }
+
+    state.texture = SDL_CreateTexture(
+        state.win.renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        state.win.bWidth,
+        state.win.bHeight
+    );
+
+    if (!state.texture) {
+        LOG("Failed to recreate texture: " << SDL_GetError());
+        state.running = false;
+        return;
+    }
+
+    LOG("Resized to " << state.win.width << "x" << state.win.height <<
+        " (buffer: " << state.win.bWidth << "x" << state.win.bHeight << ")");
+
+    state.win.resized = false;
+}
+
 void update()
 {
-    updateInput(&state.input);
-    if (pollEvents(nullptr, &state.input)) { state.running = false; return; }
+    // Poll events (this now automatically calls updateInput)
+    if (pollEvents(nullptr, &state.input, &state.win)) {
+        state.running = false;
+        return;
+    }
 
-    if (isKeyDown(&state.input, KEY_LSHIFT)) releaseMouse(state.win.window, &state.input);
-    else if (!isMouseGrabbed(&state.input)) grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
-    int dx, dy; getMouseDelta(&state.input, &dx, &dy);
+    // Handle window resize
+    handle_resize();
+
+    // Mouse grab control
+    if (isKeyDown(&state.input, KEY_LSHIFT)) {
+        releaseMouse(state.win.window, &state.input);
+    }
+    else if (!isMouseGrabbed(&state.input)) {
+        grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
+    }
+
+    // Camera rotation
+    int dx, dy;
+    getMouseDelta(&state.input, &dx, &dy);
     cameraRotate(&state.cam, dx * state.mouse_sensitivity, -dy * state.mouse_sensitivity);
 
+    // Camera movement
     if (isKeyDown(&state.input, KEY_W)) cameraMove(&state.cam, state.cam.front, state.move_speed);
     if (isKeyDown(&state.input, KEY_S)) cameraMove(&state.cam, mul(state.cam.front,-1), state.move_speed);
     if (isKeyDown(&state.input, KEY_A)) cameraMove(&state.cam, mul(state.cam.right,-1), state.move_speed);
@@ -149,29 +204,43 @@ int main() {
     windowInit(&state.win);
     state.win.width   = WIDTH;
     state.win.height  = HEIGHT;
-    state.win.bWidth  = WIDTH  * RENDER_SCALE;
-    state.win.bHeight = HEIGHT * RENDER_SCALE;
+    state.win.bWidth  = static_cast<int>(WIDTH  * RENDER_SCALE);
+    state.win.bHeight = static_cast<int>(HEIGHT * RENDER_SCALE);
     state.win.title = "ray";
+    state.win.vsync = false;
+
     ASSERT(createWindow(&state.win));
 
-    state.texture = SDL_CreateTexture(state.win.renderer, SDL_PIXELFORMAT_ARGB8888,
-                                      SDL_TEXTUREACCESS_STREAMING,
-                                      state.win.bWidth, state.win.bHeight);
+    state.texture = SDL_CreateTexture(
+        state.win.renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        state.win.bWidth,
+        state.win.bHeight
+    );
+
+    if (!state.texture) {
+        LOG("Failed to create texture: " << SDL_GetError());
+        destroyWindow(&state.win);
+        return 1;
+    }
 
     cameraInit(&state.cam);
     state.cam.position = vec3(0,3,10);
-    state.cam.yaw = -90; state.cam.pitch = -20; cameraUpdate(&state.cam);
+    state.cam.yaw = -90;
+    state.cam.pitch = -20;
+    cameraUpdate(&state.cam);
 
     inputInit(&state.input);
 
     state.running = true;
-    state.move_speed = 0.1;
+    state.move_speed = 0.1f;
     state.mouse_sensitivity = 0.3f;
     state.num_models = 0;
     state.num_threads = static_cast<int>(std::thread::hardware_concurrency());
     if (!state.num_threads) state.num_threads = 4;
 
-    {
+    {   // Load models
         if (Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1,0,0), 0, 0)) {
             modelLoad(cube, PATH);
             modelTransform(cube, vec3(0, 1, 0), vec3(0, 0, 0), vec3(4,4,4));
@@ -183,6 +252,8 @@ int main() {
         update();
 
         modelUpdate(state.models, state.num_models);
+
+        // Build scene triangle list
         state.scene_tris.clear();
         for (int m = 0; m < state.num_models; m++)
         {
@@ -194,24 +265,32 @@ int main() {
         }
 
         render_frame();
-        updateFramebuffer(&state.win, state.texture);
+        ASSERT(updateFramebuffer(&state.win, state.texture));
 
         imguiNewFrame();
-
             ImGui::Begin("status");
             ImGui::Text("Path: %s", PATH);
             ImGui::Text("Camera pos: %.2f, %.2f, %.2f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
-            ImGui::Text("Fps: %f", getFPS(&state.win));
+            ImGui::Text("Fps: %.2f", getFPS(&state.win));
+            ImGui::Text("Delta: %.4f ms", getDelta(&state.win) * 1000.0);
             ImGui::Text("Triangles: %zu", state.scene_tris.size());
+            ImGui::Text("Resolution: %dx%d (buffer: %dx%d)", state.win.width, state.win.height, state.win.bWidth, state.win.bHeight);
             ImGui::End();
-
         imguiEndFrame(&state.win);
+
         SDL_RenderPresent(state.win.renderer);
         updateFrame(&state.win);
     }
 
-    for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]);
-    SDL_DestroyTexture(state.texture);
+    // Cleanup
+    for (int i = 0; i < state.num_models; i++) {
+        modelFree(&state.models[i]);
+    }
+
+    if (state.texture) {
+        SDL_DestroyTexture(state.texture);
+    }
+
     destroyWindow(&state.win);
     return 0;
 }

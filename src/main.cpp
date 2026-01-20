@@ -205,7 +205,6 @@ int main() {
     state.win.bWidth  = static_cast<int>(WIDTH  * RENDER_SCALE);
     state.win.bHeight = static_cast<int>(HEIGHT * RENDER_SCALE);
     state.win.title = "ray";
-    state.win.vsync = false;
 
     ASSERT(createWindow(&state.win));
 

@@ -174,7 +174,7 @@ void handle_resize()
 void update()
 {
     // Poll events (this now automatically calls updateInput)
-    if (pollEvents(nullptr, &state.input, &state.win)) {
+    if (pollEvents(&state.win, &state.input)) {
         state.running = false;
         return;
     }

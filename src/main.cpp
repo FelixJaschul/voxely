@@ -20,15 +20,15 @@
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
+#define CUBE_GRID   16
+#define CUBE_SIZE   1.0f
+#define CUBE_PAD    0.25f
+
 #define PATH "../res/cube.obj"
 #define WIDTH 800
 #define HEIGHT 600
 #define RENDER_SCALE 0.5f
-#define MAX_MODELS 64
-
-#define CUBE_GRID   4
-#define CUBE_SIZE   1.0f
-#define CUBE_PAD    0.25f
+#define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID
 
 // Prepared triangle
 typedef struct

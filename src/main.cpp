@@ -23,14 +23,15 @@
 #define RENDER_SCALE 0.5f
 #define MAX_MODELS 64
 
-#define CUBE_GRID   4      // 4x4x4 = 64 cubes (must fit in MAX_MODELS)
+#define CUBE_GRID   4
 #define CUBE_SIZE   1.0f
-#define CUBE_PAD    0.25f  // spacing between cubes
+#define CUBE_PAD    0.25f
 
 // Prepared triangle
 typedef struct
 {
     Vec3 v0, e1, e2;
+    Vec3 normal;
     Vec3 color;
 } PreparedTriangle;
 
@@ -73,8 +74,7 @@ State state = {};
 
 #define LOG(x) do { std::cout << x << std::endl; } while(0)
 
-// Ray-triangle intersection macro
-bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* t)
+bool ray_triangle_intersect(const Ray& ray, const PreparedTriangle* tri, float* t)
 {
     const Vec3 h = cross(ray.direction, tri->e2);
     const float a = dot(tri->e1, h);
@@ -92,19 +92,22 @@ bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* 
     return false;
 }
 
-// Trace ray macro
 Vec3 trace_ray(const Ray& ray)
 {
     float min_t = 1e10f;
     const PreparedTriangle* hit = nullptr;
-    for (const auto& tri : state.scene_tris)
-    {
+
+    for (const auto& tri : state.scene_tris) {
+        if (dot(tri.normal, ray.direction) <= 0.0f) continue; // backface cull
+
         float t;
-        if (ray_triangle_intersect(ray, &tri, &t))
-            if (t < min_t) { min_t = t; hit = &tri; }
+        if (ray_triangle_intersect(ray, &tri, &t) && t < min_t) {
+            min_t = t;
+            hit = &tri;
+        }
     }
-    if (!hit) return vec3(0,0,0);
-    return hit->color;
+
+    return hit ? hit->color : vec3(0,0,0);
 }
 
 void render_frame()
@@ -237,7 +240,7 @@ int main() {
     state.num_threads = static_cast<int>(std::thread::hardware_concurrency());
     if (!state.num_threads) state.num_threads = 4;
 
-    {   // Build big cube from many small cubes
+    {
         constexpr float step = CUBE_SIZE + CUBE_PAD;
         constexpr float half = (CUBE_GRID - 1) * step * 0.5f;
 
@@ -269,22 +272,25 @@ int main() {
         }
     }
 
-    while (state.running)
     {
-        update();
-
         modelUpdate(state.models, state.num_models);
-
-        // Build scene triangle list
         state.scene_tris.clear();
         for (int m = 0; m < state.num_models; m++)
         {
             const Model* model = &state.models[m];
-            for (int i = 0; i < model->num_triangles; i++) {
-                const auto& [v0,v1,v2] = model->transformed_triangles[i];
-                state.scene_tris.push_back({ v0, sub(v1,v0), sub(v2,v0), model->mat.color });
+            for (int i = 0; i < model->num_triangles; i++)
+            {
+                const auto& [v0, v1, v2] = model->transformed_triangles[i];
+                const Vec3 e1 = sub(v1,v0);
+                const Vec3 e2 = sub(v2,v0);
+                state.scene_tris.push_back({ v0, e1, e2, norm(cross(e1,e2)), model->mat.color });
             }
         }
+    }
+
+    while (state.running)
+    {
+        update();
 
         render_frame();
         ASSERT(updateFramebuffer(&state.win, state.texture));

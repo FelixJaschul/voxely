@@ -104,39 +104,28 @@ Vec3 trace_ray(const Ray& ray)
 
 void render_frame()
 {
-    const float aspect = static_cast<float>(state.win.bWidth) / static_cast<float>(state.win.bHeight);
     const float vp_height = 2.0f * tanf(static_cast<float>(state.cam.fov * M_PI / 180.0f) / 2.0f);
-    const float vp_width = vp_height * aspect;
-
+    const float vp_width = vp_height * static_cast<float>(state.win.bWidth) / static_cast<float>(state.win.bHeight);
     auto render_rows = [&](const int y0, const int y1)
     {
         for (int y = y0; y < y1; y++)
         {
             for (int x = 0; x < state.win.bWidth; x++)
             {
-                const float u = (static_cast<float>(x) / static_cast<float>(state.win.bWidth - 1) - 0.5f) * vp_width;
-                const float v = (0.5f - static_cast<float>(y) / static_cast<float>(state.win.bHeight - 1)) * vp_height;
+                const float u = (static_cast<float>(x) / (state.win.bWidth - 1) - 0.5f) * vp_width;
+                const float v = (0.5f - static_cast<float>(y) / (state.win.bHeight - 1)) * vp_height;
+                const auto [cx, cy, cz] = trace_ray(cameraGetRay(&state.cam, u, v));
 
-                const Ray ray = cameraGetRay(&state.cam, u, v);
-                const auto [cx, cy, cz] = trace_ray(ray);
-
-                const auto r = static_cast<uint8_t>(fminf(cx, 1) * 255);
-                const auto g = static_cast<uint8_t>(fminf(cy, 1) * 255);
-                const auto b = static_cast<uint8_t>(fminf(cz, 1) * 255);
-
-                state.win.buffer[y * state.win.bWidth + x] = (0xFF<<24)|(r<<16)|(g<<8)|b;
+                state.win.buffer[y * state.win.bWidth + x] = (0xFF<<24) |
+                    (static_cast<uint8_t>(fminf(cx, 1) * 255) << 16) |
+                    (static_cast<uint8_t>(fminf(cy, 1) * 255) << 8) |
+                    (static_cast<uint8_t>(fminf(cz, 1) * 255));
             }
         }
     };
 
     std::vector<std::future<void>> jobs;
-    const int rows = state.win.bHeight / state.num_threads;
-
-    for (int i = 0; i < state.num_threads; i++) {
-        int s = i * rows;
-        int e = (i == state.num_threads-1) ? state.win.bHeight : (i+1)*rows;
-        jobs.push_back(std::async(std::launch::async, render_rows, s, e));
-    }
+    for (int i = 0; i < state.num_threads; i++) jobs.push_back(std::async(std::launch::async, render_rows, i * state.win.bHeight / state.num_threads, (i == state.num_threads-1) ? state.win.bHeight : (i+1)*state.win.bHeight / state.num_threads));
     for (auto& j : jobs) j.wait();
 }
 
@@ -244,21 +233,14 @@ int main() {
                 {
                     if (state.num_models >= MAX_MODELS) break;
 
-                    // Simple color variation for readability
-                    const Vec3 color = vec3(
+                    Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(
                         static_cast<float>(x) / (CUBE_GRID - 1),
                         static_cast<float>(y) / (CUBE_GRID - 1),
-                        static_cast<float>(z) / (CUBE_GRID - 1)
-                    );
-
-                    Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, color, 0, 0);
+                        static_cast<float>(z) / (CUBE_GRID - 1)), 0, 0);
                     ASSERT(cube);
 
                     modelLoad(cube, PATH);
-
-                    const Vec3 pos = vec3(x * step - half, y * step - half, z * step - half);
-
-                    modelTransform(cube, pos, vec3(0, 0, 0), vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
+                    modelTransform(cube, vec3(x * step - half, y * step - half, z * step - half), vec3(0, 0, 0), vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
                 }
             }
         }

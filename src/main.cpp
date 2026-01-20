@@ -14,9 +14,6 @@
 #define IMGUI_IMPLEMENTATION
 #include <wrapper/core.h>
 
-#define ASSERT(x) do { if(!(x)) std::cout << "Assertion failed: " << #x << std::endl; } while(0)
-#define LOG(x) do { std::cout << x << std::endl; } while(0)
-
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
@@ -32,25 +29,6 @@ typedef struct
     Vec3 v0, e1, e2;
     Vec3 color;
 } PreparedTriangle;
-
-// Ray-triangle intersection
-bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* t)
-{
-    const Vec3 h = cross(ray.direction, tri->e2);
-    const float a = dot(tri->e1, h);
-    if (a > -0.00001f && a < 0.00001f) return false;
-
-    const float f = 1.0f / a;
-    const Vec3 s = sub(ray.origin, tri->v0);
-    const float u = f * dot(s, h);
-    if (u < 0.0f || u > 1.0f) return false;
-
-    const Vec3 q = cross(s, tri->e1);
-    if (const float v = f * dot(ray.direction, q); v < 0.0f || u + v > 1.0f) return false;
-
-    if (const float _t = f * dot(tri->e2, q); _t > 0.00001f) { *t = _t; return true; }
-    return false;
-}
 
 // State
 typedef struct
@@ -74,19 +52,53 @@ typedef struct
 
 State state;
 
+#define cleanup() do { \
+    for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]); \
+    if (state.texture) SDL_DestroyTexture(state.texture); \
+    destroyWindow(&state.win); \
+} while(0)
+
+#define ASSERT(x) do { \
+    if(!(x)) { \
+        std::cout << "Assertion failed: " << #x << " " << SDL_GetError() << std::endl; \
+        state.running = false; \
+        cleanup(); \
+        exit(1); \
+    } \
+} while(0)
+
+#define LOG(x) do { std::cout << x << std::endl; } while(0)
+
+// Ray-triangle intersection macro
+bool ray_triangle_intersect(const Ray &ray, const PreparedTriangle* tri, float* t)
+{
+    const Vec3 h = cross(ray.direction, tri->e2);
+    const float a = dot(tri->e1, h);
+    if (a > -0.00001f && a < 0.00001f) return false;
+
+    const float f = 1.0f / a;
+    const Vec3 s = sub(ray.origin, tri->v0);
+    const float u = f * dot(s, h);
+    if (u < 0.0f || u > 1.0f) return false;
+
+    const Vec3 q = cross(s, tri->e1);
+    if (const float v = f * dot(ray.direction, q); v < 0.0f || u + v > 1.0f) return false;
+
+    if (const float _t = f * dot(tri->e2, q); _t > 0.00001f) { *t = _t; return true; }
+    return false;
+}
+
+// Trace ray macro
 Vec3 trace_ray(const Ray& ray)
 {
     float min_t = 1e10f;
     const PreparedTriangle* hit = nullptr;
-
     for (const auto& tri : state.scene_tris)
     {
         float t;
-        if (ray_triangle_intersect(ray, &tri, &t)) {
+        if (ray_triangle_intersect(ray, &tri, &t))
             if (t < min_t) { min_t = t; hit = &tri; }
-        }
     }
-
     if (!hit) return vec3(0,0,0);
     return hit->color;
 }
@@ -134,20 +146,14 @@ void handle_resize()
     if (!state.win.resized) return;
 
     // Update buffer dimensions based on new window size
-    state.win.bWidth  = static_cast<int>(state.win.width  * RENDER_SCALE);
-    state.win.bHeight = static_cast<int>(state.win.height * RENDER_SCALE);
+    state.win.bWidth  = static_cast<int>(RENDER_SCALE * static_cast<float>(state.win.width));
+    state.win.bHeight = static_cast<int>(RENDER_SCALE * static_cast<float>(state.win.height));
 
     // Recreate framebuffer
-    if (!resizeBuffer(&state.win)) {
-        LOG("Failed to resize framebuffer");
-        state.running = false;
-        return;
-    }
+    ASSERT(resizeBuffer(&state.win));
 
     // Recreate texture
-    if (state.texture) {
-        SDL_DestroyTexture(state.texture);
-    }
+    if (state.texture) SDL_DestroyTexture(state.texture);
 
     state.texture = SDL_CreateTexture(
         state.win.renderer,
@@ -157,11 +163,7 @@ void handle_resize()
         state.win.bHeight
     );
 
-    if (!state.texture) {
-        LOG("Failed to recreate texture: " << SDL_GetError());
-        state.running = false;
-        return;
-    }
+    ASSERT(state.texture);
 
     LOG("Resized to " << state.win.width << "x" << state.win.height <<
         " (buffer: " << state.win.bWidth << "x" << state.win.bHeight << ")");
@@ -181,12 +183,8 @@ void update()
     handle_resize();
 
     // Mouse grab control
-    if (isKeyDown(&state.input, KEY_LSHIFT)) {
-        releaseMouse(state.win.window, &state.input);
-    }
-    else if (!isMouseGrabbed(&state.input)) {
-        grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
-    }
+    if (isKeyDown(&state.input, KEY_LSHIFT)) releaseMouse(state.win.window, &state.input);
+    else if (!isMouseGrabbed(&state.input)) grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
 
     // Camera rotation
     int dx, dy;
@@ -219,11 +217,7 @@ int main() {
         state.win.bHeight
     );
 
-    if (!state.texture) {
-        LOG("Failed to create texture: " << SDL_GetError());
-        destroyWindow(&state.win);
-        return 1;
-    }
+    ASSERT(state.texture);
 
     cameraInit(&state.cam);
     state.cam.position = vec3(0,3,10);
@@ -283,14 +277,6 @@ int main() {
     }
 
     // Cleanup
-    for (int i = 0; i < state.num_models; i++) {
-        modelFree(&state.models[i]);
-    }
-
-    if (state.texture) {
-        SDL_DestroyTexture(state.texture);
-    }
-
-    destroyWindow(&state.win);
+    cleanup();
     return 0;
 }

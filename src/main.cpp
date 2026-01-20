@@ -21,7 +21,11 @@
 #define WIDTH 800
 #define HEIGHT 600
 #define RENDER_SCALE 0.5f
-#define MAX_MODELS 32
+#define MAX_MODELS 64
+
+#define CUBE_GRID   4      // 4x4x4 = 64 cubes (must fit in MAX_MODELS)
+#define CUBE_SIZE   1.0f
+#define CUBE_PAD    0.25f  // spacing between cubes
 
 // Prepared triangle
 typedef struct
@@ -233,10 +237,35 @@ int main() {
     state.num_threads = static_cast<int>(std::thread::hardware_concurrency());
     if (!state.num_threads) state.num_threads = 4;
 
-    {   // Load models
-        if (Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1,0,0), 0, 0)) {
-            modelLoad(cube, PATH);
-            modelTransform(cube, vec3(0, 1, 0), vec3(0, 0, 0), vec3(4,4,4));
+    {   // Build big cube from many small cubes
+        constexpr float step = CUBE_SIZE + CUBE_PAD;
+        constexpr float half = (CUBE_GRID - 1) * step * 0.5f;
+
+        for (int z = 0; z < CUBE_GRID; z++)
+        {
+            for (int y = 0; y < CUBE_GRID; y++)
+            {
+                for (int x = 0; x < CUBE_GRID; x++)
+                {
+                    if (state.num_models >= MAX_MODELS) break;
+
+                    // Simple color variation for readability
+                    const Vec3 color = vec3(
+                        static_cast<float>(x) / (CUBE_GRID - 1),
+                        static_cast<float>(y) / (CUBE_GRID - 1),
+                        static_cast<float>(z) / (CUBE_GRID - 1)
+                    );
+
+                    Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, color, 0, 0);
+                    ASSERT(cube);
+
+                    modelLoad(cube, PATH);
+
+                    const Vec3 pos = vec3(x * step - half, y * step - half, z * step - half);
+
+                    modelTransform(cube, pos, vec3(0, 0, 0), vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
+                }
+            }
         }
     }
 

@@ -42,7 +42,7 @@ struct HitRecord {
 
 static inline void bvh_build(BVHNode **root, const Model *models, int num);
 void bvh_free(BVHNode *n);
-bool bvh_intersect(BVHNode *root, BvhRay ray, HitRecord *rec);
+bool bvh_intersect(BVHNode *root, const BvhRay &ray, HitRecord *rec);
 
 #ifdef __cplusplus
 }
@@ -56,7 +56,8 @@ typedef struct {
     Vec3 center;
 } Item;
 
-static inline AABB box_tri(const Triangle t) {
+static inline AABB box_tri(const Triangle &t)
+{
     AABB b;
     b.min.x = fminf(fminf(t.v0.x, t.v1.x), t.v2.x);
     b.min.y = fminf(fminf(t.v0.y, t.v1.y), t.v2.y);
@@ -67,21 +68,24 @@ static inline AABB box_tri(const Triangle t) {
     return b;
 }
 
-static inline AABB box_merge(const AABB a, const AABB b) {
+static inline AABB box_merge(const AABB &a, const AABB &b)
+{
     AABB r;
     r.min.x = fminf(a.min.x, b.min.x); r.min.y = fminf(a.min.y, b.min.y); r.min.z = fminf(a.min.z, b.min.z);
     r.max.x = fmaxf(a.max.x, b.max.x); r.max.y = fmaxf(a.max.y, b.max.y); r.max.z = fmaxf(a.max.z, b.max.z);
     return r;
 }
 
-static inline float box_surface_area(const AABB box) {
+static inline float box_surface_area(const AABB &box)
+{
     const float dx = box.max.x - box.min.x;
     const float dy = box.max.y - box.min.y;
     const float dz = box.max.z - box.min.z;
     return 2.0f * (dx * dy + dy * dz + dz * dx);
 }
 
-static inline bool box_hit(const AABB box, const BvhRay r, float tmin, float tmax) {
+static inline bool box_hit(const AABB &box, const BvhRay &r, float tmin, float tmax)
+{
     const float t0x = (box.min.x - r.origin.x) * r.inv_direction.x;
     const float t1x = (box.max.x - r.origin.x) * r.inv_direction.x;
     const float t0y = (box.min.y - r.origin.y) * r.inv_direction.y;
@@ -105,16 +109,17 @@ static int cmp_z(const void *a, const void *b) {
     return (((Item*)a)->center.z > ((Item*)b)->center.z) - (((Item*)a)->center.z < ((Item*)b)->center.z);
 }
 
-static BVHNode* build(Item *items, const int n) {
-    BVHNode *node = (BVHNode*)malloc(sizeof(BVHNode));
+static BVHNode* build(Item *items, const int n)
+{
+    const auto node = static_cast<BVHNode *>(malloc(sizeof(BVHNode)));
     node->bounds = box_tri(items[0].tri);
     for (int i = 1; i < n; i++)
         node->bounds = box_merge(node->bounds, box_tri(items[i].tri));
 
     if (n <= LEAF_SIZE) {
         node->count = n;
-        node->tris = (Triangle*)malloc(n * sizeof(Triangle));
-        node->mats = (Material*)malloc(n * sizeof(Material));
+        node->tris = static_cast<Triangle *>(malloc(n * sizeof(Triangle)));
+        node->mats = static_cast<Material *>(malloc(n * sizeof(Material)));
         for (int i = 0; i < n; i++) {
             node->tris[i] = items[i].tri;
             node->mats[i] = items[i].mat;
@@ -125,7 +130,7 @@ static BVHNode* build(Item *items, const int n) {
 
     const Vec3 extent = sub(node->bounds.max, node->bounds.min);
     int axis = (extent.y > extent.x) ? 1 : 0;
-    if (extent.z > ((float*)&extent)[axis]) axis = 2;
+    if (extent.z <= ((float *) &extent)[axis]) axis = 2;
 
     qsort(items, n, sizeof(Item), axis == 0 ? cmp_x : axis == 1 ? cmp_y : cmp_z);
 
@@ -138,34 +143,31 @@ static BVHNode* build(Item *items, const int n) {
         if (split <= 0 || split >= n) continue;
 
         AABB left_box = box_tri(items[0].tri);
-        for (int j = 1; j < split; j++)
-            left_box = box_merge(left_box, box_tri(items[j].tri));
+        for (int j = 1; j < split; j++) left_box = box_merge(left_box, box_tri(items[j].tri));
 
         AABB right_box = box_tri(items[split].tri);
-        for (int j = split + 1; j < n; j++)
-            right_box = box_merge(right_box, box_tri(items[j].tri));
+        for (int j = split + 1; j < n; j++) right_box = box_merge(right_box, box_tri(items[j].tri));
 
-        const float cost = box_surface_area(left_box) * split + box_surface_area(right_box) * (n - split);
-
-        if (cost < best_cost) {
+        if (const float cost = box_surface_area(left_box) * split + box_surface_area(right_box) * (n - split); cost < best_cost) {
             best_cost = cost;
             best_split = split;
         }
     }
 
     node->count = 0;
-    node->tris = NULL;
-    node->mats = NULL;
+    node->tris = nullptr;
+    node->mats = nullptr;
     node->left = build(items, best_split);
     node->right = build(items + best_split, n - best_split);
     return node;
 }
 
-static inline void bvh_build(BVHNode **root, const Model *models, const int num) {
+static inline void bvh_build(BVHNode **root, const Model *models, const int num)
+{
     int total = 0;
     for (int i = 0; i < num; i++) total += models[i].num_triangles;
 
-    Item *items = (Item*)malloc(total * sizeof(Item));
+    const auto items = static_cast<Item *>(malloc(total * sizeof(Item)));
     int idx = 0;
     for (int i = 0; i < num; i++) {
         const Model *m = &models[i];
@@ -196,7 +198,8 @@ inline void bvh_free(BVHNode *n) {
     free(n);
 }
 
-static inline bool intersect_triangle(const BvhRay ray, const Triangle tri, const Material mat, HitRecord *rec) {
+static inline bool intersect_triangle(const BvhRay &ray, const Triangle &tri, const Material &mat, HitRecord *rec)
+{
     const Vec3 edge1 = sub(tri.v1, tri.v0);
     const Vec3 edge2 = sub(tri.v2, tri.v0);
     const Vec3 h = cross(ray.direction, edge2);
@@ -211,9 +214,8 @@ static inline bool intersect_triangle(const BvhRay ray, const Triangle tri, cons
     if (u < 0.0f || u > 1.0f) return false;
 
     const Vec3 q = cross(s, edge1);
-    const float v = f * dot(ray.direction, q);
 
-    if (v < 0.0f || u + v > 1.0f) return false;
+    if (const float v = f * dot(ray.direction, q); v < 0.0f || u + v > 1.0f) return false;
 
     const float t = f * dot(edge2, q);
 
@@ -228,7 +230,8 @@ static inline bool intersect_triangle(const BvhRay ray, const Triangle tri, cons
     return true;
 }
 
-inline bool bvh_intersect(BVHNode *root, const BvhRay ray, HitRecord *rec) {
+inline bool bvh_intersect(BVHNode *root, const BvhRay &ray, HitRecord *rec)
+{
     if (!root) return false;
     BVHNode *stack[STACK_SIZE];
     int sp = 0;

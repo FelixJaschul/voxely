@@ -50,7 +50,7 @@ typedef struct
     int num_threads;
 } State;
 
-State state;
+State state = {};
 
 #define cleanup() do { \
     for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]); \
@@ -145,7 +145,7 @@ void handle_resize()
 {
     if (!state.win.resized) return;
 
-    // Update buffer dimensions based on new window size
+    // Update buffer dimensions based on the new window size
     state.win.bWidth  = static_cast<int>(RENDER_SCALE * static_cast<float>(state.win.width));
     state.win.bHeight = static_cast<int>(RENDER_SCALE * static_cast<float>(state.win.height));
 
@@ -189,7 +189,7 @@ void update()
     // Camera rotation
     int dx, dy;
     getMouseDelta(&state.input, &dx, &dy);
-    cameraRotate(&state.cam, dx * state.mouse_sensitivity, -dy * state.mouse_sensitivity);
+    cameraRotate(&state.cam, static_cast<float>(dx) * state.mouse_sensitivity, static_cast<float>(-dy) * state.mouse_sensitivity);
 
     // Camera movement
     if (isKeyDown(&state.input, KEY_W)) cameraMove(&state.cam, state.cam.front, state.move_speed);

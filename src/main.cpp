@@ -14,6 +14,9 @@
 #define IMGUI_IMPLEMENTATION
 #include <wrapper/core.h>
 
+#define BVH_IMPLEMENTATION
+#include "bvh.h"
+
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
@@ -48,6 +51,7 @@ typedef struct
     int num_models;
 
     std::vector<PreparedTriangle> scene_tris;
+    BVHNode* bvh_root;
 
     bool running;
     float move_speed;
@@ -58,6 +62,7 @@ typedef struct
 State state = {};
 
 #define cleanup() do { \
+    if (state.bvh_root) { bvh_free(state.bvh_root); state.bvh_root = nullptr; } \
     for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]); \
     if (state.texture) SDL_DestroyTexture(state.texture); \
     destroyWindow(&state.win); \
@@ -74,40 +79,27 @@ State state = {};
 
 #define LOG(x) do { std::cout << x << std::endl; } while(0)
 
-bool ray_triangle_intersect(const Ray& ray, const PreparedTriangle* tri, float* t)
-{
-    const Vec3 h = cross(ray.direction, tri->e2);
-    const float a = dot(tri->e1, h);
-    if (a > -0.00001f && a < 0.00001f) return false;
-
-    const float f = 1.0f / a;
-    const Vec3 s = sub(ray.origin, tri->v0);
-    const float u = f * dot(s, h);
-    if (u < 0.0f || u > 1.0f) return false;
-
-    const Vec3 q = cross(s, tri->e1);
-    if (const float v = f * dot(ray.direction, q); v < 0.0f || u + v > 1.0f) return false;
-
-    if (const float _t = f * dot(tri->e2, q); _t > 0.00001f) { *t = _t; return true; }
-    return false;
-}
+#define safe_inv_dir(d) \
+    vec3( \
+        (fabsf(d.x) > 1e-8f) ? (1.0f / d.x) : 1e30f, \
+        (fabsf(d.y) > 1e-8f) ? (1.0f / d.y) : 1e30f, \
+        (fabsf(d.z) > 1e-8f) ? (1.0f / d.z) : 1e30f ); \
 
 Vec3 trace_ray(const Ray& ray)
 {
-    float min_t = 1e10f;
-    const PreparedTriangle* hit = nullptr;
+    if (!state.bvh_root) return vec3(0,0,0);
 
-    for (const auto& tri : state.scene_tris) {
-        if (dot(tri.normal, ray.direction) <= 0.0f) continue; // backface cull
+    HitRecord rec = {};
+    rec.hit = false;
+    rec.t   = 1e30f;
 
-        float t;
-        if (ray_triangle_intersect(ray, &tri, &t) && t < min_t) {
-            min_t = t;
-            hit = &tri;
-        }
-    }
+    BvhRay br;
+    br.origin        = ray.origin;
+    br.direction     = ray.direction;
+    br.inv_direction = safe_inv_dir(ray.direction);
 
-    return hit ? hit->color : vec3(0,0,0);
+    if (bvh_intersect(state.bvh_root, br, &rec)) return rec.mat.color;
+    return vec3(0,0,0);
 }
 
 void render_frame()
@@ -274,6 +266,8 @@ int main() {
 
     {
         modelUpdate(state.models, state.num_models);
+        if (state.bvh_root) bvh_free(state.bvh_root);
+        bvh_build(&state.bvh_root, state.models, state.num_models);
         state.scene_tris.clear();
         for (int m = 0; m < state.num_models; m++)
         {

@@ -14,13 +14,12 @@
 #define IMGUI_IMPLEMENTATION
 #include <wrapper/core.h>
 
-#define BVH_IMPLEMENTATION
-#include "bvh.h"
+#include "../s64tree.h"
 
 #define MAX(a, b) (( (a) > (b) ) ? (a) : (b))
 #define MIN(a, b) (( (a) < (b) ) ? (a) : (b))
 
-#define CUBE_GRID   8
+#define CUBE_GRID   16
 #define CUBE_SIZE   1.0f
 #define CUBE_PAD    0.25f
 
@@ -31,14 +30,16 @@
 #define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID
 
 // Prepared triangle
-typedef struct {
+typedef struct
+{
     Vec3 v0, e1, e2;
     Vec3 normal;
     Vec3 color;
 } PreparedTriangle;
 
 // State
-typedef struct {
+typedef struct
+{
     Window_t win;
     SDL_Texture* texture;
 
@@ -48,8 +49,9 @@ typedef struct {
     Model models[MAX_MODELS];
     int num_models;
 
-    std::vector<PreparedTriangle> scene_tris;
-    BVHNode* bvh_root;
+    S64Tree tree;
+    std::vector<uint8_t> voxels;
+    float bounds6[6];
 
     bool running;
     float move_speed;
@@ -60,11 +62,13 @@ typedef struct {
 State state = {};
 
 #define cleanup() do { \
-    if (state.bvh_root) { bvh_free(state.bvh_root); state.bvh_root = nullptr; } \
+    s64tree_free(&state.tree); \
+    state.voxels.clear(); \
     for (int i = 0; i < state.num_models; i++) modelFree(&state.models[i]); \
     if (state.texture) SDL_DestroyTexture(state.texture); \
     destroyWindow(&state.win); \
 } while(0)
+
 
 #define ASSERT(x) do { \
     if(!(x)) { \
@@ -79,24 +83,41 @@ State state = {};
 
 #define safe_inv_dir(d) \
     vec3( \
-        (fabsf(d.x) > 1e-8f) ? (1.0f / d.x) : 1e30f, \
-        (fabsf(d.y) > 1e-8f) ? (1.0f / d.y) : 1e30f, \
-        (fabsf(d.z) > 1e-8f) ? (1.0f / d.z) : 1e30f ); \
+        (fabsf((d).x) > 1e-8f) ? (1.0f / (d).x) : 1e30f, \
+        (fabsf((d).y) > 1e-8f) ? (1.0f / (d).y) : 1e30f, \
+        (fabsf((d).z) > 1e-8f) ? (1.0f / (d).z) : 1e30f )
+
 
 Vec3 trace_ray(const Ray& ray)
 {
-    if (!state.bvh_root) return vec3(0,0,0);
+    // If tree is empty, return black
+    if (state.tree.node_pool.empty()) return vec3(0,0,0);
 
-    HitRecord rec = {};
-    rec.hit = false;
-    rec.t   = 1e30f;
+    S64Ray sr = {};
+    sr.origin  = ray.origin;
+    sr.dir     = ray.direction;
+    sr.inv_dir = safe_inv_dir(ray.direction);
 
-    BvhRay br{};
-    br.origin        = ray.origin;
-    br.direction     = ray.direction;
-    br.inv_direction = safe_inv_dir(ray.direction);
+    S64Hit hit = {};
+    if (s64tree_intersect(&state.tree, &sr, &hit))
+    {
+        // Simple coloring: normalize hit point within world bounds
+        const float minx = state.bounds6[0], miny = state.bounds6[1], minz = state.bounds6[2];
+        const float sx   = state.bounds6[3] - state.bounds6[0];
+        const float sy   = state.bounds6[4] - state.bounds6[1];
+        const float sz   = state.bounds6[5] - state.bounds6[2];
 
-    if (bvh_intersect(state.bvh_root, br, &rec)) return rec.mat.color;
+        float r = (hit.point.x - minx) / sx;
+        float g = (hit.point.y - miny) / sy;
+        float b = (hit.point.z - minz) / sz;
+
+        r = std::clamp(r, 0.0f, 1.0f);
+        g = std::clamp(g, 0.0f, 1.0f);
+        b = std::clamp(b, 0.0f, 1.0f);
+
+        return vec3(r,g,b);
+    }
+
     return vec3(0,0,0);
 }
 
@@ -222,7 +243,10 @@ int main() {
     {
         constexpr float step = CUBE_SIZE + CUBE_PAD;
         constexpr float half = (CUBE_GRID - 1) * step * 0.5f;
+        constexpr float world_min = -0.5f * (CUBE_GRID * step);
+        constexpr float world_max =  0.5f * (CUBE_GRID * step);
 
+        state.voxels.assign(CUBE_GRID * CUBE_GRID * CUBE_GRID, 0);
         for (int z = 0; z < CUBE_GRID; z++)
         {
             for (int y = 0; y < CUBE_GRID; y++)
@@ -230,37 +254,24 @@ int main() {
                 for (int x = 0; x < CUBE_GRID; x++)
                 {
                     if (state.num_models >= MAX_MODELS) break;
-
                     Model* cube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(
                         static_cast<float>(x) / (CUBE_GRID - 1),
                         static_cast<float>(y) / (CUBE_GRID - 1),
                         static_cast<float>(z) / (CUBE_GRID - 1)), 0, 0);
                     ASSERT(cube);
-
+                    state.voxels[(z * CUBE_GRID + y) * CUBE_GRID + x] = 1;
                     modelLoad(cube, PATH);
                     modelTransform(cube, vec3(x * step - half, y * step - half, z * step - half), vec3(0, 0, 0), vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
                 }
             }
         }
+
+        state.bounds6[0] = world_min; state.bounds6[1] = world_min; state.bounds6[2] = world_min;
+        state.bounds6[3] = world_max; state.bounds6[4] = world_max; state.bounds6[5] = world_max;
+        state.tree = s64tree_build(state.voxels.data(), CUBE_GRID, state.bounds6);
     }
 
-    {
-        modelUpdate(state.models, state.num_models);
-        if (state.bvh_root) bvh_free(state.bvh_root);
-        bvh_build(&state.bvh_root, state.models, state.num_models);
-        state.scene_tris.clear();
-        for (int m = 0; m < state.num_models; m++)
-        {
-            const Model* model = &state.models[m];
-            for (int i = 0; i < model->num_triangles; i++)
-            {
-                const auto& [v0, v1, v2] = model->transformed_triangles[i];
-                const Vec3 e1 = sub(v1,v0);
-                const Vec3 e2 = sub(v2,v0);
-                state.scene_tris.push_back({ v0, e1, e2, norm(cross(e1,e2)), model->mat.color });
-            }
-        }
-    }
+    modelUpdate(state.models, state.num_models);
 
     while (state.running)
     {
@@ -275,7 +286,7 @@ int main() {
             ImGui::Text("Camera pos: %.2f, %.2f, %.2f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
             ImGui::Text("Fps: %.2f", getFPS(&state.win));
             ImGui::Text("Delta: %.4f ms", getDelta(&state.win) * 1000.0);
-            ImGui::Text("Triangles: %zu", state.scene_tris.size());
+            ImGui::Text("S64 nodes: %zu", state.tree.node_pool.size());
             ImGui::Text("Resolution: %dx%d (buffer: %dx%d)", state.win.width, state.win.height, state.win.bWidth, state.win.bHeight);
             ImGui::End();
         imguiEndFrame(&state.win);

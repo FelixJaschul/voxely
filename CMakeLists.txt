@@ -35,3 +35,13 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     target_compile_options(voxely PRIVATE -O3)
 endif()
+
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    target_compile_options(voxely PRIVATE
+            -march=armv8.5-a
+            -mtune=apple-m2
+            -ffast-math
+            -fvectorize
+            -fslp-vectorize-aggressive
+    )
+endif()

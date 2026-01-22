@@ -15,7 +15,7 @@
 #define IMGUI_IMPLEMENTATION
 #include "wrapper/core.h"
 
-#define CUBE_GRID   64
+#define CUBE_GRID   32
 #define CUBE_SIZE   1.0f
 #define CUBE_PAD    0.25f
 #define PATH "../res/cube.obj"

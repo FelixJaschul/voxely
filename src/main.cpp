@@ -15,14 +15,14 @@
 #define IMGUI_IMPLEMENTATION
 #include "wrapper/core.h"
 
-#define CUBE_GRID   32
+#define CUBE_GRID   64
 #define CUBE_SIZE   1.0f
 #define CUBE_PAD    0.25f
 #define PATH "../res/cube.obj"
 #define WIDTH 1250
 #define HEIGHT 850
 #define RENDER_SCALE 0.5f
-#define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID
+#define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID +1
 
 typedef struct {
     Window_t win;
@@ -32,6 +32,7 @@ typedef struct {
     Input input;
     Model models[MAX_MODELS];
     int num_models;
+    bool cam_to_light;
     bool running;
 } State;
 
@@ -87,8 +88,9 @@ void render()
         ImGui::Text("Models: %d", state.num_models);
         ImGui::Text("Resolution: %dx%d", state.win.bWidth, state.win.bHeight);
         ImGui::Separator();
-        ImGui::Checkbox("Wireframe (F1)", &state.renderer.wireframe);
-        ImGui::Checkbox("Backface Culling (F2)", &state.renderer.backface_culling);
+        ImGui::Checkbox("Wireframe", &state.renderer.wireframe);
+        ImGui::Checkbox("Backface Culling", &state.renderer.backface_culling);
+        ImGui::Checkbox("Camera To Light", &state.cam_to_light);
         ImGui::End();
     imguiEndFrame(&state.win);
 
@@ -123,6 +125,7 @@ int main()
     inputInit(&state.input);
 
     render3DInit(&state.renderer, &state.win, &state.cam);
+    state.renderer.light_dir = vec3(0.0f, 0.0f, 0.0f);
 
     state.running = true;
     state.num_models = 0;
@@ -160,9 +163,27 @@ int main()
         LOG("Created " << state.num_models << " models");
     }
 
+    // after building your cube grid
+    Model* lightCube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
+    ASSERT(lightCube);
+    modelLoad(lightCube, PATH);
+
     while (state.running)
     {
         update();
+        static float lightAngle = 0.0f;
+        lightAngle += static_cast<float>(getDelta(&state.win)) * 0.2f;
+
+        state.renderer.light_dir = norm(vec3(cosf(lightAngle), -0.35f, sinf(lightAngle)));
+
+        constexpr float radius = 120.0f;
+        const Vec3 lightPos = vec3(cosf(lightAngle) * radius, 60.0f, sinf(lightAngle) * radius);
+
+        constexpr float lightSize = 8.0f;
+        modelTransform(lightCube, lightPos, vec3(0,0,0), vec3(lightSize, lightSize, lightSize));
+
+        modelUpdate(lightCube, 1);
+        if (state.cam_to_light) state.cam.position = lightPos;
         render();
     }
 

@@ -1,6 +1,3 @@
-// 3D Rasterizer with ImGui - matches GPU raytracer structure
-// Compile: g++ -o rasterizer main.cpp -lSDL3 -framework Metal
-
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <iostream>
@@ -27,7 +24,7 @@
 typedef struct {
     Window_t win;
     Renderer3D renderer;
-    SDL_Texture* texture;
+    SDL_Texture *texture;
     Camera cam;
     Input input;
     Model models[MAX_MODELS];
@@ -50,7 +47,8 @@ State state = {};
 
 void update()
 {
-    if (pollEvents(&state.win, &state.input)) {
+    if (pollEvents(&state.win, &state.input))
+    {
         state.running = false;
         return;
     }
@@ -84,7 +82,7 @@ void render()
         ImGui::Text("Pos: %.1f, %.1f, %.1f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
         ImGui::Text("Yaw: %.1f, Pitch: %.1f", state.cam.yaw, state.cam.pitch);
         ImGui::Text("Front: %.2f, %.2f, %.2f", state.cam.front.x, state.cam.front.y, state.cam.front.z);
-        ImGui::Text("FPS: %.1f (%.2fms)", getFPS(&state.win), getDelta(&state.win)*1000);
+        ImGui::Text("FPS: %.1f (%.2fms)", getFPS(&state.win), getDelta(&state.win) * 1000);
         ImGui::Text("Models: %d", state.num_models);
         ImGui::Text("Resolution: %dx%d", state.win.bWidth, state.win.bHeight);
         ImGui::Separator();
@@ -137,34 +135,28 @@ int main()
         LOG("Building " << CUBE_GRID << "x" << CUBE_GRID << "x" << CUBE_GRID << " cube grid...");
 
         for (int z = 0; z < CUBE_GRID; z++)
-        for (int y = 0; y < CUBE_GRID; y++)
-        for (int x = 0; x < CUBE_GRID; x++) {
-            if (state.num_models >= MAX_MODELS) break;
+            for (int y = 0; y < CUBE_GRID; y++)
+                for (int x = 0; x < CUBE_GRID; x++)
+                {
+                    if (state.num_models >= MAX_MODELS) break;
 
-            Model* c = modelCreate(
-                state.models,
-                &state.num_models,
-                MAX_MODELS,
-                vec3(x/(CUBE_GRID-1.0f), y/(CUBE_GRID-1.0f), z/(CUBE_GRID-1.0f)),
-                0, 0
-            );
-            ASSERT(c);
+                    Model *c = modelCreate(
+                        state.models, &state.num_models, MAX_MODELS,
+                        vec3(x / (CUBE_GRID - 1.0f), y / (CUBE_GRID - 1.0f), z / (CUBE_GRID - 1.0f)),
+                        0, 0);
+                    ASSERT(c);
 
-            modelLoad(c, PATH);
-            modelTransform(
-                c,
-                vec3(x*step-half, y*step-half, z*step-half),
-                vec3(0, 0, 0),
-                vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE)
-            );
-        }
+                    modelLoad(c, PATH);
+                    modelTransform(c,
+                        vec3(x * step - half, y * step - half, z * step - half), vec3(0, 0, 0),
+                        vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
+                }
 
         modelUpdate(state.models, state.num_models);
         LOG("Created " << state.num_models << " models");
     }
 
-    // after building your cube grid
-    Model* lightCube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
+    Model *lightCube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
     ASSERT(lightCube);
     modelLoad(lightCube, PATH);
 
@@ -180,7 +172,7 @@ int main()
         const Vec3 lightPos = vec3(cosf(lightAngle) * radius, 60.0f, sinf(lightAngle) * radius);
 
         constexpr float lightSize = 8.0f;
-        modelTransform(lightCube, lightPos, vec3(0,0,0), vec3(lightSize, lightSize, lightSize));
+        modelTransform(lightCube, lightPos, vec3(0, 0, 0), vec3(lightSize, lightSize, lightSize));
 
         modelUpdate(lightCube, 1);
         if (state.cam_to_light) state.cam.position = lightPos;

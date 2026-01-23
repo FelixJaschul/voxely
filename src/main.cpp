@@ -123,7 +123,7 @@ int main()
     inputInit(&state.input);
 
     render3DInit(&state.renderer, &state.win, &state.cam);
-    state.renderer.light_dir = vec3(0.0f, 0.0f, 0.0f);
+    state.renderer.light_dir = vec3(0.3f, -1.0f, 0.5f);
 
     state.running = true;
     state.num_models = 0;
@@ -160,13 +160,19 @@ int main()
     ASSERT(lightCube);
     modelLoad(lightCube, PATH);
 
+    /*Model *b = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
+    ASSERT(b);
+    modelLoad(b, "../res/buny.obj");
+    modelTransform(b, vec3(1, 1, 1), vec3(0, 0, 0), vec3(200, 200, 200));
+    modelUpdate(state.models, state.num_models);*/
+
     while (state.running)
     {
         update();
         static float lightAngle = 0.0f;
         lightAngle += static_cast<float>(getDelta(&state.win)) * 0.2f;
 
-        state.renderer.light_dir = norm(vec3(cosf(lightAngle), -0.35f, sinf(lightAngle)));
+        state.renderer.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
 
         constexpr float radius = 120.0f;
         const Vec3 lightPos = vec3(cosf(lightAngle) * radius, 60.0f, sinf(lightAngle) * radius);

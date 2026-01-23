@@ -12,14 +12,115 @@
 #define IMGUI_IMPLEMENTATION
 #include "wrapper/core.h"
 
-#define CUBE_GRID   50
+#define CUBE_GRID   30
 #define CUBE_SIZE   1.0f
 #define CUBE_PAD    0.25f
-#define PATH "../res/cube.obj"
+#define PATH "res/cube.obj"
 #define WIDTH 1250
 #define HEIGHT 850
 #define RENDER_SCALE 0.5f
-#define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID +1
+#define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID +100
+
+#define UTIL_IMPLEMENTATION
+#include "bvh.h"
+
+#define GRID_SIZE CUBE_GRID
+uint8_t voxel_grid[GRID_SIZE][GRID_SIZE][GRID_SIZE] = {0};
+
+typedef struct {
+    bool hit;
+    float t;
+    Vec3 normal;
+    Vec3 color;
+} VoxelHit;
+
+static VoxelHit grid_traverse(BvhRay ray) 
+{
+    constexpr float step = CUBE_SIZE + CUBE_PAD;
+    constexpr float gridSizeWorld = (GRID_SIZE) * step;
+    constexpr float half = gridSizeWorld * 0.5f;
+
+    Vec3 gridMin = vec3(-half, -half, -half);
+
+    Vec3 rayToGrid = sub(ray.origin, gridMin);
+
+    int exitX = ray.direction.x > 0 ? GRID_SIZE : -1;
+    int exitY = ray.direction.y > 0 ? GRID_SIZE : -1;
+    int exitZ = ray.direction.z > 0 ? GRID_SIZE : -1;
+
+    int x = (int)floorf(rayToGrid.x / step);
+    int y = (int)floorf(rayToGrid.y / step);
+    int z = (int)floorf(rayToGrid.z / step);
+
+    float tx = (ray.direction.x > 0) ? (x + 1) * step : x * step;
+    float ty = (ray.direction.y > 0) ? (y + 1) * step : y * step;
+    float tz = (ray.direction.z > 0) ? (z + 1) * step : z * step;
+
+    float tMaxX = (tx - rayToGrid.x) / ray.direction.x;
+    float tMaxY = (ty - rayToGrid.y) / ray.direction.y;
+    float tMaxZ = (tz - rayToGrid.z) / ray.direction.z;
+
+    float tDeltaX = step / fabsf(ray.direction.x);
+    float tDeltaY = step / fabsf(ray.direction.y);
+    float tDeltaZ = step / fabsf(ray.direction.z);
+
+    int stepX = (ray.direction.x > 0) ? 1 : -1;
+    int stepY = (ray.direction.y > 0) ? 1 : -1;
+    int stepZ = (ray.direction.z > 0) ? 1 : -1;
+    
+    VoxelHit hit_rec = { .hit = false, .t = FLT_MAX };
+
+    while (true) 
+    {
+        if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE && z >= 0 && z < GRID_SIZE) 
+        {
+            if (voxel_grid[z][y][x]) 
+            {
+                hit_rec.hit = true;
+                
+                if (tMaxX < tMaxY) {
+                    if (tMaxX < tMaxZ) hit_rec.t = tMaxX;
+                    else hit_rec.t = tMaxZ;
+                } else {
+                    if (tMaxY < tMaxZ) hit_rec.t = tMaxY;
+                    else hit_rec.t = tMaxZ;
+                }
+
+                float fx = (x - GRID_SIZE/2.f);
+                float fy = (y - GRID_SIZE/2.f);
+                float fz = (z - GRID_SIZE/2.f);
+                hit_rec.normal = norm(vec3(fx, fy, fz));
+                
+                hit_rec.color = vec3(x / (float)GRID_SIZE, y / (float)GRID_SIZE, z / (float)GRID_SIZE);
+
+                return hit_rec;
+            }
+        }
+
+        if (tMaxX < tMaxY) {
+            if (tMaxX < tMaxZ) {
+                x += stepX;
+                tMaxX += tDeltaX;
+                if (x == exitX) return hit_rec;
+            } else {
+                z += stepZ;
+                tMaxZ += tDeltaZ;
+                if (z == exitZ) return hit_rec;
+            }
+        } else {
+            if (tMaxY < tMaxZ) {
+                y += stepY;
+                tMaxY += tDeltaY;
+                if (y == exitY) return hit_rec;
+            } else {
+                z += stepZ;
+                tMaxZ += tDeltaZ;
+                if (z == exitZ) return hit_rec;
+            }
+        }
+    }
+}
+
 
 typedef struct {
     Window_t win;
@@ -29,6 +130,7 @@ typedef struct {
     Input input;
     Model models[MAX_MODELS];
     int num_models;
+    BVHNode* bvh_root;
     bool cam_to_light;
     bool running;
 } State;
@@ -71,9 +173,48 @@ void update()
 void render()
 {
     memset(state.win.buffer, 0, state.win.bWidth * state.win.bHeight * sizeof(uint32_t));
-    render3DClear(&state.renderer);
+    
+    // Ray casting
+    #pragma omp parallel for
+    for (int j = 0; j < state.win.bHeight; j++)
+    {
+        for (int i = 0; i < state.win.bWidth; i++)
+        {
+            float u = (2.0f * i - state.win.bWidth) / state.win.bHeight;
+            float v = -((2.0f * j - state.win.bHeight) / state.win.bHeight);
 
-    render3DScene(&state.renderer, state.models, state.num_models);
+            Vec3 dir = norm(add(state.cam.front, add(mul(state.cam.right, u), mul(state.cam.up, v))));
+
+            BvhRay ray = {
+                .origin = state.cam.position,
+                .direction = dir,
+                .inv_direction = vec3(1.0f/dir.x, 1.0f/dir.y, 1.0f/dir.z)
+            };
+
+            // Voxel grid intersection
+            VoxelHit voxel_hit = grid_traverse(ray);
+
+            // BVH intersection
+            HitRecord rec = { .hit = false, .t = FLT_MAX };
+            if (state.bvh_root) {
+                bvh_intersect(state.bvh_root, ray, &rec);
+            }
+            
+            uint32_t color = 0;
+            if (voxel_hit.hit && voxel_hit.t < rec.t) {
+                 float diff = fmaxf(0.0f, dot(voxel_hit.normal, state.renderer.light_dir));
+                 Vec3 c = mul(voxel_hit.color, diff);
+                 color = 0xFF000000 | ((int)(c.x * 255) << 16) | ((int)(c.y * 255) << 8) | (int)(c.z * 255);
+            } else if (rec.hit) {
+                 float diff = fmaxf(0.0f, dot(rec.normal, state.renderer.light_dir));
+                 Vec3 c = mul(rec.mat.color, diff);
+                 color = 0xFF000000 | ((int)(c.x * 255) << 16) | ((int)(c.y * 255) << 8) | (int)(c.z * 255);
+            }
+            
+            state.win.buffer[j * state.win.bWidth + i] = color;
+        }
+    }
+
 
     ASSERT(updateFramebuffer(&state.win, state.texture));
 
@@ -86,8 +227,6 @@ void render()
         ImGui::Text("Models: %d", state.num_models);
         ImGui::Text("Resolution: %dx%d", state.win.bWidth, state.win.bHeight);
         ImGui::Separator();
-        ImGui::Checkbox("Wireframe", &state.renderer.wireframe);
-        ImGui::Checkbox("Backface Culling", &state.renderer.backface_culling);
         ImGui::Checkbox("Camera To Light", &state.cam_to_light);
         ImGui::End();
     imguiEndFrame(&state.win);
@@ -127,33 +266,21 @@ int main()
 
     state.running = true;
     state.num_models = 0;
+    state.bvh_root = NULL;
 
     {
-        constexpr float step = CUBE_SIZE + CUBE_PAD;
-        constexpr float half = (CUBE_GRID - 1) * step * 0.5f;
-
-        LOG("Building " << CUBE_GRID << "x" << CUBE_GRID << "x" << CUBE_GRID << " cube grid...");
-
-        for (int z = 0; z < CUBE_GRID; z++)
-            for (int y = 0; y < CUBE_GRID; y++)
-                for (int x = 0; x < CUBE_GRID; x++)
-                {
-                    if (state.num_models >= MAX_MODELS) break;
-
-                    Model *c = modelCreate(
-                        state.models, &state.num_models, MAX_MODELS,
-                        vec3(x / (CUBE_GRID - 1.0f), y / (CUBE_GRID - 1.0f), z / (CUBE_GRID - 1.0f)),
-                        0, 0);
-                    ASSERT(c);
-
-                    modelLoad(c, PATH);
-                    modelTransform(c,
-                        vec3(x * step - half, y * step - half, z * step - half), vec3(0, 0, 0),
-                        vec3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE));
-                }
-
-        modelUpdate(state.models, state.num_models);
-        LOG("Created " << state.num_models << " models");
+        LOG("Building " << GRID_SIZE << "x" << GRID_SIZE << "x" << GRID_SIZE << " voxel grid...");
+        for (int z = 0; z < GRID_SIZE; z++)
+        for (int y = 0; y < GRID_SIZE; y++)
+        for (int x = 0; x < GRID_SIZE; x++)
+        {
+            // Simple sphere for now
+            float fx = (x - GRID_SIZE/2.f);
+            float fy = (y - GRID_SIZE/2.f);
+            float fz = (z - GRID_SIZE/2.f);
+            if (sqrtf(fx*fx + fy*fy + fz*fz) < GRID_SIZE/2.f) voxel_grid[z][y][x] = 1;
+        }
+        LOG("Created voxel grid");
     }
 
     Model *lightCube = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
@@ -162,9 +289,13 @@ int main()
 
     /*Model *b = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
     ASSERT(b);
-    modelLoad(b, "../res/buny.obj");
-    modelTransform(b, vec3(1, 1, 1), vec3(0, 0, 0), vec3(200, 200, 200));
-    modelUpdate(state.models, state.num_models);*/
+    modelLoad(b, "res/buny.obj");
+    modelTransform(b, vec3(1, 20, 1), vec3(0, 0, 0), vec3(200, 200, 200));
+    modelUpdate(b, 1); */
+
+    LOG("Building BVH for non-voxel models...");
+    bvh_build(&state.bvh_root, state.models, state.num_models);
+    LOG("BVH built.");
 
     while (state.running)
     {
@@ -185,6 +316,7 @@ int main()
         render();
     }
 
+    bvh_free(state.bvh_root);
     cleanup();
     return 0;
 }

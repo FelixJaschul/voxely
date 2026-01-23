@@ -57,13 +57,11 @@ struct VoxelGrid
 
 static void buildVoxelModel(Model* m, const VoxelGrid* g)
 {
-    auto V = [&] (const float x, const float y, const float z)
-    {
+    auto V = [&](const float x, const float y, const float z) {
         return vec3(x - g->size * 0.5f, y - g->size * 0.5f, z - g->size * 0.5f);
     };
 
-    auto VEC = [&] (float h, const float s, const float v)
-    {
+    auto VEC = [&](float h, const float s, const float v) {
         h = fmodf(h, 360.0f);
         if (h < 0) h += 360.0f;
         const float c = v * s;
@@ -79,50 +77,76 @@ static void buildVoxelModel(Model* m, const VoxelGrid* g)
         return vec3(r + m, g + m, b + m);
     };
 
-    free(m->transformed_triangles);
-    m->transformed_triangles = static_cast<Triangle *>(malloc(sizeof(Triangle) * g->size * g->size * g->size * 12));
-    m->num_triangles = 0;
-
+    int tri_count = 0;
     const int offsets[6][3] = { {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1} };
-    const int faces[6][6] = {  {0,4,6, 0,6,2}, {1,3,7, 1,7,5}, {0,1,5, 0,5,4}, {2,6,7, 2,7,3}, {0,2,3, 0,3,1}, {4,5,7, 4,7,6} };
 
     for (int z = 0; z < g->size; z++)
     for (int y = 0; y < g->size; y++)
-    for (int x = 0; x < g->size; x++)
-    {
+    for (int x = 0; x < g->size; x++) {
+        if (!g->at(x, y, z)) continue;
+        for (const auto offset : offsets) {
+            const int nx = x + offset[0];
+            const int ny = y + offset[1];
+            const int nz = z + offset[2];
+            if (!g->at(nx, ny, nz)) tri_count += 2; // 2 triangles per face
+        }
+    }
+
+    // Free old data
+    if (m->transformed_triangles) {
+        free(m->transformed_triangles);
+        m->transformed_triangles = nullptr;
+    }
+
+    // Early exit if no geometry
+    if (tri_count == 0) {
+        m->num_triangles = 0;
+        return;
+    }
+
+    // Allocate exactly what we need
+    m->transformed_triangles = static_cast<Triangle*>(malloc(sizeof(Triangle) * tri_count));
+    m->num_triangles = 0;
+
+    // Precompute normalization factor
+    const float invSize = (g->size > 1) ? 1.0f / (g->size - 1) : 1.0f;
+
+    // Face vertex indices (matches your P[8] layout)
+    const int faces[6][6] = {
+        {0,4,6, 0,6,2}, // -X
+        {1,3,7, 1,7,5}, // +X
+        {0,1,5, 0,5,4}, // -Y
+        {2,6,7, 2,7,3}, // +Y
+        {0,2,3, 0,3,1}, // -Z
+        {4,5,7, 4,7,6}  // +Z
+    };
+
+    for (int z = 0; z < g->size; z++)
+    for (int y = 0; y < g->size; y++)
+    for (int x = 0; x < g->size; x++) {
         if (!g->at(x, y, z)) continue;
 
-        const float invSize = (g->size > 1) ? 1.0f / (g->size - 1) : 1.0f;
-        // Diagonal gradient from bottom-left (low x, high z) to top-right (high x, low z)
-        const float t = (x * invSize - z * invSize + 1.0f) * 0.5f; // [-1,1] → [0,1]
-        const float clamped_t = fmaxf(0.0f, fminf(1.0f, t));
-        const Vec3 voxel_color = VEC(clamped_t * 360.0f, 1.0f, 1.0f);
+        // Compute diagonal rainbow color
+        const float t = (x * invSize - z * invSize + 1.0f) * 0.5f;
+        const Vec3 voxel_color = VEC(fmaxf(0.0f, fminf(1.0f, t)) * 360.0f, 1.0f, 1.0f);
 
+        // Build voxel corners
         const Vec3 P[8] = { V(x, y, z), V(x+1, y, z), V(x, y+1, z), V(x+1, y+1, z), V(x, y, z+1), V(x+1, y, z+1), V(x, y+1, z+1), V(x+1, y+1, z+1) };
 
-        for (int f = 0; f < 6; f++)
-        {
+        // Emit visible faces
+        for (int f = 0; f < 6; f++) {
             const int nx = x + offsets[f][0];
             const int ny = y + offsets[f][1];
             const int nz = z + offsets[f][2];
-            if (!g->at(nx, ny, nz))
-            {
-                Triangle* t0 = &m->transformed_triangles[m->num_triangles++];
-                t0->v0 = P[faces[f][0]];
-                t0->v1 = P[faces[f][1]];
-                t0->v2 = P[faces[f][2]];
-                t0->color = voxel_color;
-
-                Triangle* t1 = &m->transformed_triangles[m->num_triangles++];
-                t1->v0 = P[faces[f][3]];
-                t1->v1 = P[faces[f][4]];
-                t1->v2 = P[faces[f][5]];
-                t1->color = voxel_color;
+            if (!g->at(nx, ny, nz)) {
+                m->transformed_triangles[m->num_triangles++] = { P[faces[f][0]], P[faces[f][1]], P[faces[f][2]], voxel_color };
+                m->transformed_triangles[m->num_triangles++] = { P[faces[f][3]], P[faces[f][4]], P[faces[f][5]], voxel_color };
             }
         }
     }
 
-    if (m->num_triangles > 0) m->transformed_triangles = static_cast<Triangle *>(realloc(m->transformed_triangles, sizeof(Triangle) * m->num_triangles));
+    // Safety check
+    assert(m->num_triangles == tri_count);
 }
 
 struct State {

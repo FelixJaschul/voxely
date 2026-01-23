@@ -1,5 +1,5 @@
-#include <SDL3/SDL.h>
-#include <imgui.h>
+#include "../lib/SDL/include/SDL3/SDL.h"
+#include "../lib/imgui/imgui.h"
 #include <iostream>
 
 #define CORE_IMPLEMENTATION
@@ -9,11 +9,11 @@
 #define SDL_IMPLEMENTATION
 #define IMGUI_IMPLEMENTATION
 #define RENDER3D_IMPLEMENTATION
-#include "wrapper/core.h"
+#include "../lib/wrapper/core.h"
 
 #define GRID_SIZE 40
-#define WIDTH 1250
-#define HEIGHT 850
+#define WIDTH 2100
+#define HEIGHT 1300
 
 // VOXEL DATA STRUCTURE
 struct VoxelGrid
@@ -47,7 +47,7 @@ struct VoxelGrid
                 data[z][y][x] = 1;
     }
 
-    void sierpinskiRec(const int x, const int y, const int z, const int size)
+    void mengerRec(int x, int y, int z, int size)
     {
         if (size <= 0) return;
         if (size == 1) {
@@ -55,23 +55,52 @@ struct VoxelGrid
             return;
         }
 
-        for (int dz = 0; dz < 3; dz++)
-        for (int dy = 0; dy < 3; dy++)
-        for (int dx = 0; dx < 3; dx++) {
-            if (dx == 1 && dy == 1 && dz == 1) continue;
-            sierpinskiRec(
-                x + dx * size / 3,
-                y + dy * size / 3,
-                z + dz * size / 3,
-                size / 3
+        const int third = size / 3;
+        if (third == 0) {
+            // Too small to subdivide; just fill the block
+            for (int dz = 0; dz < size; ++dz)
+            for (int dy = 0; dy < size; ++dy)
+            for (int dx = 0; dx < size; ++dx) {
+                int nx = x + dx, ny = y + dy, nz = z + dz;
+                if (nx >= 0 && nx < this->size &&
+                    ny >= 0 && ny < this->size &&
+                    nz >= 0 && nz < this->size)
+                    data[nz][ny][nx] = 1;
+            }
+            return;
+        }
+
+        // Iterate over 3x3x3 subcubes
+        for (int dz = 0; dz < 3; ++dz)
+        for (int dy = 0; dy < 3; ++dy)
+        for (int dx = 0; dx < 3; ++dx) {
+            // Skip the center of each face and the very center
+            bool isCenterOfFace =
+                (dx == 1 && dy == 1) || // Z-axis face centers
+                (dx == 1 && dz == 1) || // Y-axis face centers
+                (dy == 1 && dz == 1);   // X-axis face centers
+
+            bool isVeryCenter = (dx == 1 && dy == 1 && dz == 1);
+
+            if (isCenterOfFace || isVeryCenter) {
+                // Remove these 7 cubes
+                continue;
+            }
+
+            // Recurse into the remaining 20 subcubes
+            mengerRec(
+                x + dx * third,
+                y + dy * third,
+                z + dz * third,
+                third
             );
         }
     }
 
-    void setSierpinski()
+    void setStructure()
     {
         memset(data, 0, sizeof(data));
-        sierpinskiRec(0, 0, 0, size);
+        mengerRec(0, 0, 0, size);
     }
 
     [[nodiscard]] bool at(const int x, const int y, const int z) const
@@ -220,7 +249,7 @@ int main()
     inputInit(&state.input);
 
     state.voxels.init();
-    state.voxels.setSierpinski();
+    state.voxels.setStructure();
 
     memset(&state.voxelModel, 0, sizeof(state.voxelModel));
     buildVoxelModel(&state.voxelModel, &state.voxels);
@@ -230,17 +259,18 @@ int main()
     state.r.light_dir = vec3(0.3f, -1.0f, 0.5f);
     state.running = true;
 
-    while (state.running) {
+    while (state.running)
+    {
         {
             if (pollEvents(&state.win, &state.input)) {
                 state.running = false; break;
             }
 
-            if (isKeyDown(&state.input, KEY_SPACE)) releaseMouse(state.win.window, &state.input);
+            if (isKeyDown(&state.input, KEY_LCTRL)) releaseMouse(state.win.window, &state.input);
             else if (!isMouseGrabbed(&state.input)) grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
 
             state.faster = isKeyDown(&state.input, KEY_LSHIFT);
-            const float speed = state.faster ? 2.0f : 0.1f;
+            const float speed = state.faster ? 4.0f : 2.0f;
 
             int dx, dy;
             getMouseDelta(&state.input, &dx, &dy);
@@ -261,14 +291,15 @@ int main()
             ASSERT(updateFramebuffer(&state.win, state.texture));
 
             imguiNewFrame();
-            ImGui::Begin("voxely");
-            ImGui::Text("Pos: %.1f, %.1f, %.1f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
-            ImGui::Text("FPS: %.1f (%.2fms)", getFPS(&state.win), getDelta(&state.win) * 1000);
-            ImGui::Text("Grid: %dx%dx%d", GRID_SIZE, GRID_SIZE, GRID_SIZE);
-            ImGui::Text("Tris: %d", state.voxelModel.num_triangles);
-            ImGui::Separator();
-            ImGui::Checkbox("Light", &state.r.light);
-            ImGui::End();
+                ImGui::Begin("voxely");
+                ImGui::Text("Pos: %.1f, %.1f, %.1f", state.cam.position.x, state.cam.position.y, state.cam.position.z);
+                ImGui::Text("FPS: %.1f (%.2fms)", getFPS(&state.win), getDelta(&state.win) * 1000);
+                ImGui::Text("Grid: %dx%dx%d", GRID_SIZE, GRID_SIZE, GRID_SIZE);
+                ImGui::Text("Tris: %d", state.voxelModel.num_triangles);
+                ImGui::Separator();
+                ImGui::Checkbox("Close", &state.running);
+                ImGui::Checkbox("Light", &state.r.light);
+                ImGui::End();
             imguiEndFrame(&state.win);
 
             SDL_RenderPresent(state.win.renderer);

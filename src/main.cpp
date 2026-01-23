@@ -11,7 +11,7 @@
 #define RENDER3D_IMPLEMENTATION
 #include "wrapper/core.h"
 
-#define GRID_SIZE 500
+#define GRID_SIZE 100
 #define WIDTH 1250
 #define HEIGHT 850
 
@@ -193,8 +193,6 @@ int main()
     inputInit(&state.input);
 
     state.voxels.init();
-    //state.voxels.setSphere(GRID_SIZE * 0.4f);
-    state.voxels.setCube(GRID_SIZE, GRID_SIZE, GRID_SIZE, GRID_SIZE);
 
     memset(&state.voxelModel, 0, sizeof(state.voxelModel));
     buildVoxelModel(&state.voxelModel, &state.voxels);

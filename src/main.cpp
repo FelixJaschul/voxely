@@ -16,7 +16,8 @@
 #define HEIGHT 850
 
 // VOXEL DATA STRUCTURE
-struct VoxelGrid {
+struct VoxelGrid
+{
     uint8_t data[GRID_SIZE][GRID_SIZE][GRID_SIZE];
     int size;
 
@@ -34,6 +35,18 @@ struct VoxelGrid {
             data[z][y][x] = ((x - size * 0.5f)*(x - size * 0.5f) + (y - size * 0.5f)*(y - size * 0.5f) + (z - size * 0.5f)*(z - size * 0.5f) < radius*radius) ? 1 : 0;
     }
 
+    void setCube(const int cx, const int cy, const int cz, int size)
+    {
+        const int half = size / 2;
+        for (int z = cz - half; z <= cz + half; z++)
+        for (int y = cy - half; y <= cy + half; y++)
+        for (int x = cx - half; x <= cx + half; x++)
+            if (x >= 0 && x < this->size &&
+                y >= 0 && y < this->size &&
+                z >= 0 && z < this->size)
+                data[z][y][x] = 1;
+    }
+
     [[nodiscard]] bool at(const int x, const int y, const int z) const
     {
         if (x < 0 || y < 0 || z < 0) return false;
@@ -44,47 +57,77 @@ struct VoxelGrid {
 
 static void buildVoxelModel(Model* m, const VoxelGrid* g)
 {
-    const int maxVox = g->size * g->size * g->size;
-    const int maxTris = maxVox * 12;
+    auto V = [&] (const float x, const float y, const float z)
+    {
+        return vec3(x - g->size * 0.5f, y - g->size * 0.5f, z - g->size * 0.5f);
+    };
+
+    auto VEC = [&] (float h, const float s, const float v)
+    {
+        h = fmodf(h, 360.0f);
+        if (h < 0) h += 360.0f;
+        const float c = v * s;
+        const float x = c * (1 - fabsf(fmodf(h / 60.0f, 2) - 1));
+        const float m = v - c;
+        float r, g, b;
+        if (h < 60)       { r = c; g = x; b = 0; }
+        else if (h < 120) { r = x; g = c; b = 0; }
+        else if (h < 180) { r = 0; g = c; b = x; }
+        else if (h < 240) { r = 0; g = x; b = c; }
+        else if (h < 300) { r = x; g = 0; b = c; }
+        else              { r = c; g = 0; b = x; }
+        return vec3(r + m, g + m, b + m);
+    };
 
     free(m->transformed_triangles);
-    m->transformed_triangles = static_cast<Triangle *>(malloc(sizeof(Triangle) * maxTris));
+    m->transformed_triangles = static_cast<Triangle *>(malloc(sizeof(Triangle) * g->size * g->size * g->size * 12));
     m->num_triangles = 0;
-    m->mat.color = vec3(0.7f, 0.8f, 1.0f);
-
-    auto V = [&](const float x, const float y, const float z) { return vec3(x - g->size * 0.5f, y - g->size * 0.5f, z - g->size * 0.5f); };
-    auto T = [&](Triangle* out, int& n, const Vec3 a, const Vec3 b, const Vec3 c) { out[n++] = {a, b, c}; };
 
     const int offsets[6][3] = { {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1} };
-    const int faces[6][6] = { {0,4,6, 0,6,2}, {1,3,7, 1,7,5}, {0,1,5, 0,5,4}, {2,6,7, 2,7,3}, {0,2,3, 0,3,1}, {4,5,7, 4,7,6} };
+    const int faces[6][6] = {  {0,4,6, 0,6,2}, {1,3,7, 1,7,5}, {0,1,5, 0,5,4}, {2,6,7, 2,7,3}, {0,2,3, 0,3,1}, {4,5,7, 4,7,6} };
 
-    for (int z=0; z<g->size; z++)
-    for (int y=0; y<g->size; y++)
-    for (int x=0; x<g->size; x++)
+    for (int z = 0; z < g->size; z++)
+    for (int y = 0; y < g->size; y++)
+    for (int x = 0; x < g->size; x++)
     {
-        if (!g->at(x,y,z)) continue;
-        Vec3 P[8] = { V(x, y, z), V(x+1, y, z), V(x, y+1, z), V(x+1, y+1, z), V(x, y, z+1), V(x+1, y, z+1), V(x, y+1, z+1), V(x+1, y+1, z+1) };
+        if (!g->at(x, y, z)) continue;
 
-        for (int f=0; f<6; f++)
+        const float invSize = (g->size > 1) ? 1.0f / (g->size - 1) : 1.0f;
+        // Diagonal gradient from bottom-left (low x, high z) to top-right (high x, low z)
+        const float t = (x * invSize - z * invSize + 1.0f) * 0.5f; // [-1,1] → [0,1]
+        const float clamped_t = fmaxf(0.0f, fminf(1.0f, t));
+        const Vec3 voxel_color = VEC(clamped_t * 360.0f, 1.0f, 1.0f);
+
+        const Vec3 P[8] = { V(x, y, z), V(x+1, y, z), V(x, y+1, z), V(x+1, y+1, z), V(x, y, z+1), V(x+1, y, z+1), V(x, y+1, z+1), V(x+1, y+1, z+1) };
+
+        for (int f = 0; f < 6; f++)
         {
-            const int ny = y+offsets[f][1];
-            const int nz = z+offsets[f][2];
-            const int nx = x+offsets[f][0];
+            const int nx = x + offsets[f][0];
+            const int ny = y + offsets[f][1];
+            const int nz = z + offsets[f][2];
             if (!g->at(nx, ny, nz))
             {
-                T(m->transformed_triangles, m->num_triangles, P[faces[f][0]], P[faces[f][1]], P[faces[f][2]]);
-                T(m->transformed_triangles, m->num_triangles, P[faces[f][3]], P[faces[f][4]], P[faces[f][5]]);
+                Triangle* t0 = &m->transformed_triangles[m->num_triangles++];
+                t0->v0 = P[faces[f][0]];
+                t0->v1 = P[faces[f][1]];
+                t0->v2 = P[faces[f][2]];
+                t0->color = voxel_color;
+
+                Triangle* t1 = &m->transformed_triangles[m->num_triangles++];
+                t1->v0 = P[faces[f][3]];
+                t1->v1 = P[faces[f][4]];
+                t1->v2 = P[faces[f][5]];
+                t1->color = voxel_color;
             }
         }
     }
 
-    if (m->num_triangles > 0)
-        m->transformed_triangles = static_cast<Triangle *>(realloc(m->transformed_triangles, sizeof(Triangle) * m->num_triangles));
+    if (m->num_triangles > 0) m->transformed_triangles = static_cast<Triangle *>(realloc(m->transformed_triangles, sizeof(Triangle) * m->num_triangles));
 }
 
 struct State {
     Window_t win;
-    Renderer3D r;
+    Renderer r;
     SDL_Texture* texture;
     Camera cam;
     Input input;
@@ -108,7 +151,6 @@ int main()
     state.win.title = "voxely";
     ASSERT(createWindow(&state.win));
 
-    // Streaming texture used for uploading the CPU framebuffer each frame
     state.texture = SDL_CreateTexture(
         state.win.renderer,
         SDL_PIXELFORMAT_ARGB8888,
@@ -127,12 +169,13 @@ int main()
     inputInit(&state.input);
 
     state.voxels.init();
-    state.voxels.setSphere(GRID_SIZE * 0.4f);
+    //state.voxels.setSphere(GRID_SIZE * 0.4f);
+    state.voxels.setCube(GRID_SIZE, GRID_SIZE, GRID_SIZE, GRID_SIZE);
 
     memset(&state.voxelModel, 0, sizeof(state.voxelModel));
     buildVoxelModel(&state.voxelModel, &state.voxels);
 
-    render3DInit(&state.r, &state.win, &state.cam);
+    renderInit(&state.r, &state.win, &state.cam);
 
     state.r.light_dir = vec3(0.3f, -1.0f, 0.5f);
     state.running = true;
@@ -159,12 +202,11 @@ int main()
             if (isKeyDown(&state.input, KEY_D)) cameraMove(&state.cam, state.cam.right, speed);
         }
         {
-            // Rotate light
             static float lightAngle = 0.0f;
             lightAngle += getDelta(&state.win) * 0.2f;
             state.r.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
-            render3DClear(&state.r);
-            render3DModel(&state.r, &state.voxelModel);
+            renderClear(&state.r);
+            renderModel(&state.r, &state.voxelModel);
 
             ASSERT(updateFramebuffer(&state.win, state.texture));
 
@@ -183,7 +225,7 @@ int main()
     }
 
     // Cleanup
-    render3DFree(&state.r);
+    renderFree(&state.r);
 
     if (state.voxelModel.transformed_triangles) {
         free(state.voxelModel.transformed_triangles);

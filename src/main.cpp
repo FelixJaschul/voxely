@@ -11,7 +11,7 @@
 #define RENDER3D_IMPLEMENTATION
 #include "wrapper/core.h"
 
-#define GRID_SIZE 100
+#define GRID_SIZE 40
 #define WIDTH 1250
 #define HEIGHT 850
 
@@ -45,6 +45,33 @@ struct VoxelGrid
                 y >= 0 && y < this->size &&
                 z >= 0 && z < this->size)
                 data[z][y][x] = 1;
+    }
+
+    void sierpinskiRec(const int x, const int y, const int z, const int size)
+    {
+        if (size <= 0) return;
+        if (size == 1) {
+            data[z][y][x] = 1;
+            return;
+        }
+
+        for (int dz = 0; dz < 3; dz++)
+        for (int dy = 0; dy < 3; dy++)
+        for (int dx = 0; dx < 3; dx++) {
+            if (dx == 1 && dy == 1 && dz == 1) continue;
+            sierpinskiRec(
+                x + dx * size / 3,
+                y + dy * size / 3,
+                z + dz * size / 3,
+                size / 3
+            );
+        }
+    }
+
+    void setSierpinski()
+    {
+        memset(data, 0, sizeof(data));
+        sierpinskiRec(0, 0, 0, size);
     }
 
     [[nodiscard]] bool at(const int x, const int y, const int z) const
@@ -193,6 +220,7 @@ int main()
     inputInit(&state.input);
 
     state.voxels.init();
+    state.voxels.setSierpinski();
 
     memset(&state.voxelModel, 0, sizeof(state.voxelModel));
     buildVoxelModel(&state.voxelModel, &state.voxels);
@@ -238,6 +266,8 @@ int main()
             ImGui::Text("FPS: %.1f (%.2fms)", getFPS(&state.win), getDelta(&state.win) * 1000);
             ImGui::Text("Grid: %dx%dx%d", GRID_SIZE, GRID_SIZE, GRID_SIZE);
             ImGui::Text("Tris: %d", state.voxelModel.num_triangles);
+            ImGui::Separator();
+            ImGui::Checkbox("Light", &state.r.light);
             ImGui::End();
             imguiEndFrame(&state.win);
 

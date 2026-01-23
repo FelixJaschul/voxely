@@ -11,7 +11,7 @@
 #define RENDER3D_IMPLEMENTATION
 #include "../lib/wrapper/core.h"
 
-#define GRID_SIZE 40
+#define GRID_SIZE 200
 #define WIDTH 2100
 #define HEIGHT 1300
 
@@ -47,60 +47,79 @@ struct VoxelGrid
                 data[z][y][x] = 1;
     }
 
-    void mengerRec(int x, int y, int z, int size)
-    {
-        if (size <= 0) return;
-        if (size == 1) {
-            data[z][y][x] = 1;
-            return;
-        }
-
-        const int third = size / 3;
-        if (third == 0) {
-            // Too small to subdivide; just fill the block
-            for (int dz = 0; dz < size; ++dz)
-            for (int dy = 0; dy < size; ++dy)
-            for (int dx = 0; dx < size; ++dx) {
-                int nx = x + dx, ny = y + dy, nz = z + dz;
-                if (nx >= 0 && nx < this->size &&
-                    ny >= 0 && ny < this->size &&
-                    nz >= 0 && nz < this->size)
-                    data[nz][ny][nx] = 1;
-            }
-            return;
-        }
-
-        // Iterate over 3x3x3 subcubes
-        for (int dz = 0; dz < 3; ++dz)
-        for (int dy = 0; dy < 3; ++dy)
-        for (int dx = 0; dx < 3; ++dx) {
-            // Skip the center of each face and the very center
-            bool isCenterOfFace =
-                (dx == 1 && dy == 1) || // Z-axis face centers
-                (dx == 1 && dz == 1) || // Y-axis face centers
-                (dy == 1 && dz == 1);   // X-axis face centers
-
-            bool isVeryCenter = (dx == 1 && dy == 1 && dz == 1);
-
-            if (isCenterOfFace || isVeryCenter) {
-                // Remove these 7 cubes
-                continue;
-            }
-
-            // Recurse into the remaining 20 subcubes
-            mengerRec(
-                x + dx * third,
-                y + dy * third,
-                z + dz * third,
-                third
-            );
-        }
+    // Helper functions
+    static float clamp(const float x, const float min, const float max) {
+        return fmaxf(min, fminf(max, x));
     }
 
-    void setStructure()
+    static float mix(const float a, const float b, const float t)
+    {
+        return a + t * (b - a);
+    }
+
+    static float smoothstep(const float edge0, const float edge1, float x)
+    {
+        x = clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+        return x * x * (3 - 2 * x);
+    }
+
+    static float fract(const float x)
+    {
+        return x - floorf(x);
+    }
+
+    static float hash3(const float x, const float y, const float z)
+    {
+        return fract(sin(dot(vec3(x, y, z), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+    }
+
+    float noise3(const float x, const float y, const float z)
+    {
+        const int ix = static_cast<int>(floorf(x));
+        const int iy = static_cast<int>(floorf(y));
+        const int iz = static_cast<int>(floorf(z));
+
+        const float fx = x - ix;
+        const float fy = y - iy;
+        const float fz = z - iz;
+
+        const float n000 = hash3(ix, iy, iz);
+        const float n100 = hash3(ix + 1, iy, iz);
+        const float n010 = hash3(ix, iy + 1, iz);
+        const float n110 = hash3(ix + 1, iy + 1, iz);
+        const float n001 = hash3(ix, iy, iz + 1);
+        const float n101 = hash3(ix + 1, iy, iz + 1);
+        const float n011 = hash3(ix, iy + 1, iz + 1);
+        const float n111 = hash3(ix + 1, iy + 1, iz + 1);
+
+        const float u = smoothstep(0.0f, 1.0f, fx);
+        const float v = smoothstep(0.0f, 1.0f, fy);
+        const float w = smoothstep(0.0f, 1.0f, fz);
+
+        const float nx00 = mix(n000, n100, u);
+        const float nx10 = mix(n010, n110, u);
+        const float nx01 = mix(n001, n101, u);
+        const float nx11 = mix(n011, n111, u);
+
+        const float ny0 = mix(nx00, nx10, v);
+        const float ny1 = mix(nx01, nx11, v);
+
+        return mix(ny0, ny1, w);
+    }
+
+    void setRandomNoiseSponge()
     {
         memset(data, 0, sizeof(data));
-        mengerRec(0, 0, 0, size);
+        constexpr float scale = 10.0f;
+
+        for (int z = 0; z < size; z++)
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++) {
+            const float nx = static_cast<float>(x) / size;
+            const float ny = static_cast<float>(y) / size;
+            const float nz = static_cast<float>(z) / size;
+            if (noise3(nx * scale, ny * scale, nz * scale) > 0.4f) data[z][y][x] = 1;
+        }
     }
 
     [[nodiscard]] bool at(const int x, const int y, const int z) const
@@ -111,26 +130,25 @@ struct VoxelGrid
     }
 };
 
+struct State {
+    Window_t win;
+    Renderer r;
+    SDL_Texture* texture;
+    Camera cam;
+    Input input;
+    VoxelGrid voxels;
+    Model voxelModel;
+    bool running;
+    bool faster;
+    bool light_rot;
+};
+
+static State state = {};
+
 static void buildVoxelModel(Model* m, const VoxelGrid* g)
 {
     auto V = [&](const float x, const float y, const float z) {
         return vec3(x - g->size * 0.5f, y - g->size * 0.5f, z - g->size * 0.5f);
-    };
-
-    auto VEC = [&](float h, const float s, const float v) {
-        h = fmodf(h, 360.0f);
-        if (h < 0) h += 360.0f;
-        const float c = v * s;
-        const float x = c * (1 - fabsf(fmodf(h / 60.0f, 2) - 1));
-        const float m = v - c;
-        float r, g, b;
-        if (h < 60)       { r = c; g = x; b = 0; }
-        else if (h < 120) { r = x; g = c; b = 0; }
-        else if (h < 180) { r = 0; g = c; b = x; }
-        else if (h < 240) { r = 0; g = x; b = c; }
-        else if (h < 300) { r = x; g = 0; b = c; }
-        else              { r = c; g = 0; b = x; }
-        return vec3(r + m, g + m, b + m);
     };
 
     int tri_count = 0;
@@ -160,12 +178,8 @@ static void buildVoxelModel(Model* m, const VoxelGrid* g)
         return;
     }
 
-    // Allocate exactly what we need
     m->transformed_triangles = static_cast<Triangle*>(malloc(sizeof(Triangle) * tri_count));
     m->num_triangles = 0;
-
-    // Precompute normalization factor
-    const float invSize = (g->size > 1) ? 1.0f / (g->size - 1) : 1.0f;
 
     // Face vertex indices (matches your P[8] layout)
     const int faces[6][6] = {
@@ -181,10 +195,7 @@ static void buildVoxelModel(Model* m, const VoxelGrid* g)
     for (int y = 0; y < g->size; y++)
     for (int x = 0; x < g->size; x++) {
         if (!g->at(x, y, z)) continue;
-
-        // Compute diagonal rainbow color
-        const float t = (x * invSize - z * invSize + 1.0f) * 0.5f;
-        const Vec3 voxel_color = VEC(fmaxf(0.0f, fminf(1.0f, t)) * 360.0f, 1.0f, 1.0f);
+        Vec3 voxel_color = {1.0f, 1.0f, 1.0f};
 
         // Build voxel corners
         const Vec3 P[8] = { V(x, y, z), V(x+1, y, z), V(x, y+1, z), V(x+1, y+1, z), V(x, y, z+1), V(x+1, y, z+1), V(x, y+1, z+1), V(x+1, y+1, z+1) };
@@ -204,20 +215,6 @@ static void buildVoxelModel(Model* m, const VoxelGrid* g)
     // Safety check
     assert(m->num_triangles == tri_count);
 }
-
-struct State {
-    Window_t win;
-    Renderer r;
-    SDL_Texture* texture;
-    Camera cam;
-    Input input;
-    VoxelGrid voxels;
-    Model voxelModel;
-    bool running;
-    bool faster;
-};
-
-static State state = {};
 
 int main()
 {
@@ -249,7 +246,7 @@ int main()
     inputInit(&state.input);
 
     state.voxels.init();
-    state.voxels.setStructure();
+    state.voxels.setRandomNoiseSponge();
 
     memset(&state.voxelModel, 0, sizeof(state.voxelModel));
     buildVoxelModel(&state.voxelModel, &state.voxels);
@@ -258,6 +255,7 @@ int main()
 
     state.r.light_dir = vec3(0.3f, -1.0f, 0.5f);
     state.running = true;
+    state.light_rot = true;
 
     while (state.running)
     {
@@ -282,9 +280,12 @@ int main()
             if (isKeyDown(&state.input, KEY_D)) cameraMove(&state.cam, state.cam.right, speed);
         }
         {
-            static float lightAngle = 0.0f;
-            lightAngle += getDelta(&state.win) * 0.2f;
-            state.r.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
+            if (state.light_rot)
+            {
+                static float lightAngle = 0.0f;
+                lightAngle += getDelta(&state.win) * 0.2f;
+                state.r.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
+            }
             renderClear(&state.r);
             renderModel(&state.r, &state.voxelModel);
 
@@ -299,6 +300,7 @@ int main()
                 ImGui::Separator();
                 ImGui::Checkbox("Close", &state.running);
                 ImGui::Checkbox("Light", &state.r.light);
+                ImGui::Checkbox("Light rotate", &state.light_rot);
                 ImGui::End();
             imguiEndFrame(&state.win);
 

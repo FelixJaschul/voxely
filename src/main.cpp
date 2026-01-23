@@ -1,7 +1,6 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <iostream>
-
 #define CORE_IMPLEMENTATION
 #define MATH_IMPLEMENTATION
 #define KEYS_IMPLEMENTATION
@@ -11,30 +10,22 @@
 #define SDL_IMPLEMENTATION
 #define IMGUI_IMPLEMENTATION
 #include "wrapper/core.h"
+#define UTIL_IMPLEMENTATION // BVH
+#include "bvh.h"
 
-#define CUBE_GRID   30
+#define CUBE_GRID   40
 #define CUBE_SIZE   1.0f
 #define CUBE_PAD    0.25f
-#define PATH "res/cube.obj"
+#define PATH "../res/cube.obj"
 #define WIDTH 1250
 #define HEIGHT 850
 #define RENDER_SCALE 0.5f
 #define MAX_MODELS CUBE_GRID*CUBE_GRID*CUBE_GRID +100
 
-#define UTIL_IMPLEMENTATION
-#include "bvh.h"
-
 #define GRID_SIZE CUBE_GRID
 uint8_t voxel_grid[GRID_SIZE][GRID_SIZE][GRID_SIZE] = {0};
 
-typedef struct {
-    bool hit;
-    float t;
-    Vec3 normal;
-    Vec3 color;
-} VoxelHit;
-
-static VoxelHit grid_traverse(BvhRay ray) 
+static HitRecord grid_traverse(const BvhRay &ray)
 {
     constexpr float step = CUBE_SIZE + CUBE_PAD;
     constexpr float gridSizeWorld = (GRID_SIZE) * step;
@@ -42,33 +33,33 @@ static VoxelHit grid_traverse(BvhRay ray)
 
     Vec3 gridMin = vec3(-half, -half, -half);
 
-    Vec3 rayToGrid = sub(ray.origin, gridMin);
+    const auto [rtgx, rtgy, rtgz] = sub(ray.origin, gridMin);
 
-    int exitX = ray.direction.x > 0 ? GRID_SIZE : -1;
-    int exitY = ray.direction.y > 0 ? GRID_SIZE : -1;
-    int exitZ = ray.direction.z > 0 ? GRID_SIZE : -1;
+    const int exitX = ray.direction.x > 0 ? GRID_SIZE : -1;
+    const int exitY = ray.direction.y > 0 ? GRID_SIZE : -1;
+    const int exitZ = ray.direction.z > 0 ? GRID_SIZE : -1;
 
-    int x = (int)floorf(rayToGrid.x / step);
-    int y = (int)floorf(rayToGrid.y / step);
-    int z = (int)floorf(rayToGrid.z / step);
+    int x = static_cast<int>(floorf(rtgx / step));
+    int y = static_cast<int>(floorf(rtgy / step));
+    int z = static_cast<int>(floorf(rtgz / step));
 
-    float tx = (ray.direction.x > 0) ? (x + 1) * step : x * step;
-    float ty = (ray.direction.y > 0) ? (y + 1) * step : y * step;
-    float tz = (ray.direction.z > 0) ? (z + 1) * step : z * step;
+    const float tx = (ray.direction.x > 0) ? (x + 1) * step : x * step;
+    const float ty = (ray.direction.y > 0) ? (y + 1) * step : y * step;
+    const float tz = (ray.direction.z > 0) ? (z + 1) * step : z * step;
 
-    float tMaxX = (tx - rayToGrid.x) / ray.direction.x;
-    float tMaxY = (ty - rayToGrid.y) / ray.direction.y;
-    float tMaxZ = (tz - rayToGrid.z) / ray.direction.z;
+    float tMaxX = (tx - rtgx) / ray.direction.x;
+    float tMaxY = (ty - rtgy) / ray.direction.y;
+    float tMaxZ = (tz - rtgz) / ray.direction.z;
 
-    float tDeltaX = step / fabsf(ray.direction.x);
-    float tDeltaY = step / fabsf(ray.direction.y);
-    float tDeltaZ = step / fabsf(ray.direction.z);
+    const float tDeltaX = step / fabsf(ray.direction.x);
+    const float tDeltaY = step / fabsf(ray.direction.y);
+    const float tDeltaZ = step / fabsf(ray.direction.z);
 
-    int stepX = (ray.direction.x > 0) ? 1 : -1;
-    int stepY = (ray.direction.y > 0) ? 1 : -1;
-    int stepZ = (ray.direction.z > 0) ? 1 : -1;
+    const int stepX = (ray.direction.x > 0) ? 1 : -1;
+    const int stepY = (ray.direction.y > 0) ? 1 : -1;
+    const int stepZ = (ray.direction.z > 0) ? 1 : -1;
     
-    VoxelHit hit_rec = { .hit = false, .t = FLT_MAX };
+    HitRecord hit_rec = { .hit = false, .t = FLT_MAX };
 
     while (true) 
     {
@@ -86,12 +77,12 @@ static VoxelHit grid_traverse(BvhRay ray)
                     else hit_rec.t = tMaxZ;
                 }
 
-                float fx = (x - GRID_SIZE/2.f);
-                float fy = (y - GRID_SIZE/2.f);
-                float fz = (z - GRID_SIZE/2.f);
+                const float fx = (x - GRID_SIZE/2.f);
+                const float fy = (y - GRID_SIZE/2.f);
+                const float fz = (z - GRID_SIZE/2.f);
                 hit_rec.normal = norm(vec3(fx, fy, fz));
                 
-                hit_rec.color = vec3(x / (float)GRID_SIZE, y / (float)GRID_SIZE, z / (float)GRID_SIZE);
+                hit_rec.color = vec3(x / static_cast<float>(GRID_SIZE), y / static_cast<float>(GRID_SIZE), z / static_cast<float>(GRID_SIZE));
 
                 return hit_rec;
             }
@@ -131,8 +122,8 @@ typedef struct {
     Model models[MAX_MODELS];
     int num_models;
     BVHNode* bvh_root;
-    bool cam_to_light;
     bool running;
+    bool faster;
 } State;
 
 State state = {};
@@ -155,10 +146,14 @@ void update()
         return;
     }
 
-    if (isKeyDown(&state.input, KEY_LSHIFT)) releaseMouse(state.win.window, &state.input);
+    if (isKeyDown(&state.input, KEY_SPACE)) releaseMouse(state.win.window, &state.input);
     else if (!isMouseGrabbed(&state.input)) grabMouse(state.win.window, state.win.width, state.win.height, &state.input);
+    if (isKeyDown(&state.input, KEY_LSHIFT)) state.faster = true;
+    else state.faster = false;
 
-    constexpr float speed = 0.1f;
+    float speed;
+    if (state.faster) speed = 3.0f;
+    else speed = 0.1f;
     constexpr float sensi = 0.3f;
     int dx, dy;
     getMouseDelta(&state.input, &dx, &dy);
@@ -185,21 +180,26 @@ void render()
 
             Vec3 dir = norm(add(state.cam.front, add(mul(state.cam.right, u), mul(state.cam.up, v))));
 
+            auto safe_inv = [](float d) {
+                const float eps = 1e-6f;
+                if (fabsf(d) < eps) return (d >= 0.0f ? 1.0f : -1.0f) * 1e30f; // big number
+                return 1.0f / d;
+            };
+
             BvhRay ray = {
                 .origin = state.cam.position,
                 .direction = dir,
-                .inv_direction = vec3(1.0f/dir.x, 1.0f/dir.y, 1.0f/dir.z)
+                .inv_direction = vec3(safe_inv(dir.x), safe_inv(dir.y), safe_inv(dir.z))
             };
 
             // Voxel grid intersection
-            VoxelHit voxel_hit = grid_traverse(ray);
+            HitRecord voxel_hit = grid_traverse(ray);
 
-            // BVH intersection
             HitRecord rec = { .hit = false, .t = FLT_MAX };
             if (state.bvh_root) {
                 bvh_intersect(state.bvh_root, ray, &rec);
             }
-            
+
             uint32_t color = 0;
             if (voxel_hit.hit && voxel_hit.t < rec.t) {
                  float diff = fmaxf(0.0f, dot(voxel_hit.normal, state.renderer.light_dir));
@@ -227,7 +227,6 @@ void render()
         ImGui::Text("Models: %d", state.num_models);
         ImGui::Text("Resolution: %dx%d", state.win.bWidth, state.win.bHeight);
         ImGui::Separator();
-        ImGui::Checkbox("Camera To Light", &state.cam_to_light);
         ImGui::End();
     imguiEndFrame(&state.win);
 
@@ -287,32 +286,23 @@ int main()
     ASSERT(lightCube);
     modelLoad(lightCube, PATH);
 
-    /*Model *b = modelCreate(state.models, &state.num_models, MAX_MODELS, vec3(1, 1, 1), 0.0f, 0.0f);
-    ASSERT(b);
-    modelLoad(b, "res/buny.obj");
-    modelTransform(b, vec3(1, 20, 1), vec3(0, 0, 0), vec3(200, 200, 200));
-    modelUpdate(b, 1); */
-
-    LOG("Building BVH for non-voxel models...");
     bvh_build(&state.bvh_root, state.models, state.num_models);
-    LOG("BVH built.");
 
     while (state.running)
     {
         update();
-        static float lightAngle = 0.0f;
-        lightAngle += static_cast<float>(getDelta(&state.win)) * 0.2f;
 
-        state.renderer.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
-
-        constexpr float radius = 120.0f;
-        const Vec3 lightPos = vec3(cosf(lightAngle) * radius, 60.0f, sinf(lightAngle) * radius);
-
-        constexpr float lightSize = 8.0f;
-        modelTransform(lightCube, lightPos, vec3(0, 0, 0), vec3(lightSize, lightSize, lightSize));
+        {
+            static float lightAngle = 0.0f;
+            lightAngle += static_cast<float>(getDelta(&state.win)) * 0.2f;
+            state.renderer.light_dir = norm(vec3(-cosf(lightAngle), -0.35f, -sinf(lightAngle)));
+            constexpr float radius = 120.0f;
+            const Vec3 lightPos = vec3(cosf(lightAngle) * radius, 60.0f, sinf(lightAngle) * radius);
+            constexpr float lightSize = 8.0f;
+            modelTransform(lightCube, lightPos, vec3(0, 0, 0), vec3(lightSize, lightSize, lightSize));
+        }
 
         modelUpdate(lightCube, 1);
-        if (state.cam_to_light) state.cam.position = lightPos;
         render();
     }
 
